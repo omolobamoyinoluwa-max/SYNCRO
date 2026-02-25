@@ -6,7 +6,6 @@
       "ES2022"
     ],
     "outDir": "./dist",
-    "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -17,12 +16,14 @@
     "declarationMap": true,
     "sourceMap": true,
     "types": [
+      "node",
       "jest"
     ]
   },
-  "include": [ "src/**/*"],
+  "include": [ "src/**/*", "tests/**/*"],
   "exclude": [
     "node_modules",
-    "dist"
+    "dist",
+    "src/services/blockchain-service-impl-example.ts"
   ]
 }
