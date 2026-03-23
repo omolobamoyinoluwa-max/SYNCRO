@@ -232,7 +232,7 @@ router.patch("/:id", validateSubscriptionOwnership, async (req: AuthenticatedReq
  */
 router.delete("/:id", validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const result = await subscriptionService.deleteSubscription(
+    const result = await subscriptionService.cancelSubscription(
       req.user!.id,
       Array.isArray(req.params.id) ? req.params.id[0] : req.params.id
     );
@@ -362,7 +362,7 @@ router.post("/:id/retry-sync", validateSubscriptionOwnership, async (req: Authen
 router.get("/:id/cooldown-status", validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const cooldownStatus = await subscriptionService.checkRenewalCooldown(
-      req.params.id,
+     Array.isArray(req.params.id) ? req.params.id[0] : req.params.id,
     );
 
     res.json({
@@ -413,7 +413,7 @@ router.post("/:id/cancel", validateSubscriptionOwnership, async (req: Authentica
 
     const result = await subscriptionService.cancelSubscription(
       req.user!.id,
-      req.params.id,
+      Array.isArray(req.params.id) ? req.params.id[0] : req.params.id,
     );
 
     const responseBody = {
@@ -478,7 +478,7 @@ router.post("/bulk", validateBulkSubscriptionOwnership, async (req: Authenticate
         let result;
         switch (operation) {
           case "delete":
-            result = await subscriptionService.deleteSubscription(req.user!.id, id);
+            result = await subscriptionService.cancelSubscription(req.user!.id, id);
             break;
           case "update":
             if (!data) throw new Error("Update data required");
