@@ -34,6 +34,21 @@ jest.mock('../src/utils/transaction', () => ({
   },
 }));
 
+// Mock renewalCooldownService to avoid supabase chain complexity in retryBlockchainSync tests
+jest.mock('../src/services/renewal-cooldown-service', () => ({
+  renewalCooldownService: {
+    checkCooldown: jest.fn().mockResolvedValue({
+      canRetry: true,
+      isOnCooldown: false,
+      timeRemainingSeconds: 0,
+    }),
+    recordRenewalAttempt: jest.fn().mockResolvedValue({
+      previous_attempt_at: null,
+      new_attempt_at: new Date().toISOString(),
+    }),
+  },
+}));
+
 describe('SubscriptionService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -631,16 +646,18 @@ describe('SubscriptionService', () => {
         { id: 'sub-1', name: 'Netflix', status: 'active' },
       ];
 
+      const resolvedValue = { data: mockSubscriptions, error: null, count: 1 };
       const mockQuery = {
         select: jest.fn().mockReturnThis(),
         eq: jest.fn().mockReturnThis(),
-        order: jest.fn().mockResolvedValue({
-          data: mockSubscriptions,
-          error: null,
-          count: 1,
-        }),
+        order: jest.fn().mockReturnThis(),
         limit: jest.fn().mockReturnThis(),
+        then: jest.fn().mockImplementation((resolve: any) => Promise.resolve(resolvedValue).then(resolve)),
       };
+      // Make the last eq call resolve
+      mockQuery.eq
+        .mockReturnValueOnce(mockQuery) // user_id eq
+        .mockResolvedValueOnce(resolvedValue); // status eq
 
       (supabase.from as jest.Mock).mockReturnValue(mockQuery);
 
@@ -656,16 +673,16 @@ describe('SubscriptionService', () => {
         { id: 'sub-1', name: 'Netflix', category: 'entertainment' },
       ];
 
+      const resolvedValue = { data: mockSubscriptions, error: null, count: 1 };
       const mockQuery = {
         select: jest.fn().mockReturnThis(),
         eq: jest.fn().mockReturnThis(),
-        order: jest.fn().mockResolvedValue({
-          data: mockSubscriptions,
-          error: null,
-          count: 1,
-        }),
+        order: jest.fn().mockReturnThis(),
         limit: jest.fn().mockReturnThis(),
       };
+      mockQuery.eq
+        .mockReturnValueOnce(mockQuery) // user_id eq
+        .mockResolvedValueOnce(resolvedValue); // category eq
 
       (supabase.from as jest.Mock).mockReturnValue(mockQuery);
 
@@ -828,7 +845,7 @@ describe('SubscriptionService', () => {
 
       await expect(
         subscriptionService.retryBlockchainSync('user-123', 'non-existent')
-      ).rejects.toThrow('Subscription not found');
+      ).rejects.toThrow('Subscription not found or access denied');
     });
   });
 });

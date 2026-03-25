@@ -1,4 +1,3 @@
-import '@jest/globals';
 import { sanitizeUrl } from '../src/utils/sanitize-url';
 import { EmailService } from '../src/services/email-service';
 import { NotificationPayload } from '../src/types/reminder';

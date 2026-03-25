@@ -52,6 +52,8 @@ describe('SimulationService', () => {
         renewal_url: null,
         notes: null,
         tags: [],
+        merchant_id: null,
+        expired_at: null,
         created_at: '2024-01-01',
         updated_at: '2024-01-01',
       };
@@ -79,6 +81,8 @@ describe('SimulationService', () => {
         renewal_url: null,
         notes: null,
         tags: [],
+        merchant_id: null,
+        expired_at: null,
         created_at: '2024-01-01',
         updated_at: '2024-01-01',
       };
@@ -110,6 +114,8 @@ describe('SimulationService', () => {
         renewal_url: null,
         notes: null,
         tags: [],
+        merchant_id: null,
+        expired_at: null,
         created_at: '2024-01-01',
         updated_at: '2024-01-01',
       };
@@ -139,6 +145,8 @@ describe('SimulationService', () => {
         renewal_url: null,
         notes: null,
         tags: [],
+        merchant_id: null,
+        expired_at: null,
         created_at: '2024-01-01',
         updated_at: '2024-01-01',
       };
@@ -164,3 +172,4 @@ describe('SimulationService', () => {
     });
   });
 });
+
