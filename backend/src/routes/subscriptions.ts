@@ -9,6 +9,7 @@ import { validateSubscriptionOwnership, validateBulkSubscriptionOwnership } from
 import { auditService } from '../services/audit-service';
 import { previewImport, commitImport, CSV_TEMPLATE } from '../services/csv-import-service';
 import logger from '../config/logger';
+import { SUPPORTED_CURRENCIES } from '../constants/currencies';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -43,6 +44,12 @@ const createSubscriptionSchema = z.object({
   name: z.string().min(1),
   price: z.number(),
   billing_cycle: z.enum(['monthly', 'yearly', 'quarterly']),
+  currency: z.string()
+    .refine(
+      (val) => (SUPPORTED_CURRENCIES as readonly string[]).includes(val),
+      { message: `Currency must be one of: ${SUPPORTED_CURRENCIES.join(', ')}` }
+    )
+    .optional(),
   renewal_url: safeUrlSchema.optional(),
   website_url: safeUrlSchema.optional(),
   logo_url: safeUrlSchema.optional(),
