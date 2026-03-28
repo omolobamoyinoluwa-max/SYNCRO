@@ -191,7 +191,7 @@ export class BlockchainService {
   async syncSubscription(
     userId: string,
     subscriptionId: string,
-    operation: "create" | "update" | "delete" | "cancel",
+    operation:  "create" | "update" | "delete" | "cancel" | "pause" | "unpause",
     subscriptionData: any,
   ): Promise<{ success: boolean; transactionHash?: string; error?: string }> {
     const eventData = {
@@ -308,7 +308,7 @@ export class BlockchainService {
    * This is a placeholder implementation - actual implementation depends on your Soroban contract
    */
   private async writeSubscriptionToBlockchain(
-    operation: "create" | "update" | "delete" | "cancel",
+    operation: "create" | "update" | "delete" | "cancel" | "pause" | "unpause",
     eventData: Record<string, any>,
   ): Promise<{ transactionHash: string }> {
     // TODO: Implement actual Soroban contract interaction
@@ -342,7 +342,11 @@ export class BlockchainService {
           ? "u"
           : operation === "delete"
             ? "d"
-            : "x"; // 'x' for cancel
+            : operation === "pause"
+              ? "p"
+              : operation === "unpause"
+                ? "r" // 'r' for resume/unpause
+                : "x"; // 'x' for cancel
     return {
       transactionHash: `${operationPrefix}x${Buffer.from(JSON.stringify(eventData)).toString("hex").slice(0, 62)}`,
     };

@@ -1,11 +1,15 @@
+The following is the integrated code for the `RiskDetectionService`, resolving the merge conflicts by including the `webhookService` and ensuring consistent string quoting:
+
+```typescript
 /**
  * Risk Detection Service
  * Core service for computing and managing subscription risk scores
  */
 
-import { supabase } from '../../config/database';
-import logger from '../../config/logger';
-import { Subscription } from '../../types/subscription';
+import { supabase } from "../../config/database";
+import logger from "../../config/logger";
+import { Subscription } from "../../types/subscription";
+import { webhookService } from "../webhook-service";
 import {
   RiskAssessment,
   RiskScore,
@@ -16,11 +20,11 @@ import {
   RenewalAttempt,
   RiskFactor,
   RiskLevel,
-} from '../../types/risk-detection';
-import { ConsecutiveFailuresEvaluator } from './evaluators/consecutive-failures-evaluator';
-import { BalanceProjectionEvaluator } from './evaluators/balance-projection-evaluator';
-import { ApprovalExpirationEvaluator } from './evaluators/approval-expiration-evaluator';
-import { RiskAggregator } from './risk-aggregator';
+} from "../../types/risk-detection";
+import { ConsecutiveFailuresEvaluator } from "./evaluators/consecutive-failures-evaluator";
+import { BalanceProjectionEvaluator } from "./evaluators/balance-projection-evaluator";
+import { ApprovalExpirationEvaluator } from "./evaluators/approval-expiration-evaluator";
+import { RiskAggregator } from "./risk-aggregator";
 
 export class RiskDetectionService {
   private consecutiveFailuresEvaluator: ConsecutiveFailuresEvaluator;
@@ -31,7 +35,9 @@ export class RiskDetectionService {
 
   constructor(config: RiskWeightConfig = DEFAULT_RISK_WEIGHTS) {
     this.config = config;
-    this.consecutiveFailuresEvaluator = new ConsecutiveFailuresEvaluator(config);
+    this.consecutiveFailuresEvaluator = new ConsecutiveFailuresEvaluator(
+      config,
+    );
     this.balanceProjectionEvaluator = new BalanceProjectionEvaluator(config);
     this.approvalExpirationEvaluator = new ApprovalExpirationEvaluator(config);
     this.aggregator = new RiskAggregator();
@@ -42,17 +48,30 @@ export class RiskDetectionService {
    */
   async computeRiskLevel(subscriptionId: string): Promise<RiskAssessment> {
     const startTime = Date.now();
-    
+
     try {
       // Fetch subscription
       const { data: subscription, error } = await supabase
-        .from('subscriptions')
-        .select('*')
-        .eq('id', subscriptionId)
+        .from("subscriptions")
+        .select("*")
+        .eq("id", subscriptionId)
         .single();
 
       if (error || !subscription) {
         throw new Error(`Subscription not found: ${subscriptionId}`);
+      }
+
+      if (subscription.status === "paused") {
+        logger.info(
+          `Skipping risk calculation — subscription ${subscriptionId} is paused`,
+        );
+        return {
+          subscription_id: subscriptionId,
+          risk_level: "none" as RiskLevel,
+          risk_factors: [],
+          computed_at: new Date().toISOString(),
+          skipped: true,
+        };
       }
 
       // Build risk context
@@ -73,7 +92,7 @@ export class RiskDetectionService {
       const riskLevel = this.aggregator.aggregate(riskWeights);
 
       // Convert risk weights to risk factors for storage
-      const riskFactors: RiskFactor[] = riskWeights.map(w => ({
+      const riskFactors: RiskFactor[] = riskWeights.map((w) => ({
         factor_type: w.type,
         weight: w.weight,
         details: w.details,
@@ -87,14 +106,14 @@ export class RiskDetectionService {
       };
 
       const duration = Date.now() - startTime;
-      logger.info('Risk computed for subscription', {
+      logger.info("Risk computed for subscription", {
         subscription_id: subscriptionId,
         risk_level: riskLevel,
         duration_ms: duration,
       });
 
       // Log calculation details
-      logger.debug('Risk calculation details', {
+      logger.debug("Risk calculation details", {
         subscription_id: subscriptionId,
         risk_factors: riskFactors,
         risk_level: riskLevel,
@@ -102,7 +121,7 @@ export class RiskDetectionService {
 
       return assessment;
     } catch (error) {
-      logger.error('Error computing risk level:', error);
+      logger.error("Error computing risk level:", error);
       throw error;
     }
   }
@@ -110,20 +129,33 @@ export class RiskDetectionService {
   /**
    * Save risk score to database
    */
-  async saveRiskScore(assessment: RiskAssessment, userId: string): Promise<RiskScore> {
+  async saveRiskScore(
+    assessment: RiskAssessment,
+    userId: string,
+  ): Promise<RiskScore> {
     try {
+      // Get old score to check for change
+      const { data: oldScore } = await supabase
+        .from("subscription_risk_scores")
+        .select("risk_level")
+        .eq("subscription_id", assessment.subscription_id)
+        .single();
+
       const { data, error } = await supabase
-        .from('subscription_risk_scores')
-        .upsert({
-          subscription_id: assessment.subscription_id,
-          user_id: userId,
-          risk_level: assessment.risk_level,
-          risk_factors: assessment.risk_factors,
-          last_calculated_at: assessment.computed_at,
-          updated_at: new Date().toISOString(),
-        }, {
-          onConflict: 'subscription_id',
-        })
+        .from("subscription_risk_scores")
+        .upsert(
+          {
+            subscription_id: assessment.subscription_id,
+            user_id: userId,
+            risk_level: assessment.risk_level,
+            risk_factors: assessment.risk_factors,
+            last_calculated_at: assessment.computed_at,
+            updated_at: new Date().toISOString(),
+          },
+          {
+            onConflict: "subscription_id",
+          },
+        )
         .select()
         .single();
 
@@ -131,9 +163,20 @@ export class RiskDetectionService {
         throw new Error(`Failed to save risk score: ${error.message}`);
       }
 
+      if (data && oldScore && oldScore.risk_level !== assessment.risk_level) {
+        webhookService.dispatchEvent(userId, "subscription.risk_score_changed", {
+          subscription_id: assessment.subscription_id,
+          old_risk_level: oldScore.risk_level,
+          new_risk_level: assessment.risk_level,
+          risk_factors: assessment.risk_factors
+        }).catch(err => {
+          logger.error("Failed to dispatch subscription.risk_score_changed webhook:", err);
+        });
+      }
+
       return data as RiskScore;
     } catch (error) {
-      logger.error('Error saving risk score:', error);
+      logger.error("Error saving risk score:", error);
       throw error;
     }
   }
@@ -141,22 +184,27 @@ export class RiskDetectionService {
   /**
    * Get risk score for a subscription
    */
-  async getRiskScore(subscriptionId: string, userId: string): Promise<RiskScore> {
+  async getRiskScore(
+    subscriptionId: string,
+    userId: string,
+  ): Promise<RiskScore> {
     try {
       const { data, error } = await supabase
-        .from('subscription_risk_scores')
-        .select('*')
-        .eq('subscription_id', subscriptionId)
-        .eq('user_id', userId)
+        .from("subscription_risk_scores")
+        .select("*")
+        .eq("subscription_id", subscriptionId)
+        .eq("user_id", userId)
         .single();
 
       if (error || !data) {
-        throw new Error(`Risk score not found for subscription: ${subscriptionId}`);
+        throw new Error(
+          `Risk score not found for subscription: ${subscriptionId}`,
+        );
       }
 
       return data as RiskScore;
     } catch (error) {
-      logger.error('Error fetching risk score:', error);
+      logger.error("Error fetching risk score:", error);
       throw error;
     }
   }
@@ -167,10 +215,10 @@ export class RiskDetectionService {
   async getUserRiskScores(userId: string): Promise<RiskScore[]> {
     try {
       const { data, error } = await supabase
-        .from('subscription_risk_scores')
-        .select('*')
-        .eq('user_id', userId)
-        .order('last_calculated_at', { ascending: false });
+        .from("subscription_risk_scores")
+        .select("*")
+        .eq("user_id", userId)
+        .order("last_calculated_at", { ascending: false });
 
       if (error) {
         throw new Error(`Failed to fetch user risk scores: ${error.message}`);
@@ -178,7 +226,7 @@ export class RiskDetectionService {
 
       return (data || []) as RiskScore[];
     } catch (error) {
-      logger.error('Error fetching user risk scores:', error);
+      logger.error("Error fetching user risk scores:", error);
       throw error;
     }
   }
@@ -197,7 +245,7 @@ export class RiskDetectionService {
     };
 
     try {
-      logger.info('Starting risk recalculation for all active subscriptions');
+      logger.info("Starting risk recalculation for all active subscriptions");
 
       // Fetch all active subscriptions in batches
       const batchSize = 100;
@@ -206,13 +254,13 @@ export class RiskDetectionService {
 
       while (hasMore) {
         const { data: subscriptions, error } = await supabase
-          .from('subscriptions')
-          .select('*')
-          .eq('status', 'active')
+          .from("subscriptions")
+          .select("*")
+          .eq("status", "active")
           .range(offset, offset + batchSize - 1);
 
         if (error) {
-          logger.error('Error fetching subscriptions:', error);
+          logger.error("Error fetching subscriptions:", error);
           throw error;
         }
 
@@ -235,7 +283,10 @@ export class RiskDetectionService {
               subscription_id: subscription.id,
               error: error instanceof Error ? error.message : String(error),
             });
-            logger.error(`Failed to recalculate risk for subscription ${subscription.id}:`, error);
+            logger.error(
+              `Failed to recalculate risk for subscription ${subscription.id}:`,
+              error,
+            );
           }
         }
 
@@ -245,7 +296,7 @@ export class RiskDetectionService {
 
       result.duration_ms = Date.now() - startTime;
 
-      logger.info('Risk recalculation completed', {
+      logger.info("Risk recalculation completed", {
         total: result.total,
         successful: result.successful,
         failed: result.failed,
@@ -255,7 +306,7 @@ export class RiskDetectionService {
       return result;
     } catch (error) {
       result.duration_ms = Date.now() - startTime;
-      logger.error('Error in risk recalculation:', error);
+      logger.error("Error in risk recalculation:", error);
       throw error;
     }
   }
@@ -266,11 +317,11 @@ export class RiskDetectionService {
   async recordRenewalAttempt(
     subscriptionId: string,
     success: boolean,
-    errorMessage?: string
+    errorMessage?: string,
   ): Promise<void> {
     try {
       const { error } = await supabase
-        .from('subscription_renewal_attempts')
+        .from("subscription_renewal_attempts")
         .insert({
           subscription_id: subscriptionId,
           success,
@@ -282,15 +333,16 @@ export class RiskDetectionService {
         throw new Error(`Failed to record renewal attempt: ${error.message}`);
       }
 
-      logger.info('Renewal attempt recorded', {
+      logger.info("Renewal attempt recorded", {
         subscription_id: subscriptionId,
         success,
       });
     } catch (error) {
-      logger.error('Error recording renewal attempt:', error);
+      logger.error("Error recording renewal attempt:", error);
       throw error;
     }
   }
 }
 
 export const riskDetectionService = new RiskDetectionService();
+```

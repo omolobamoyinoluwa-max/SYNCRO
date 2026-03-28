@@ -47,7 +47,14 @@ backend/
 - Telegram bot integration
 - Error handling middleware
 - Request validation
-- Rate limiting
+
+### ✅ Security Features
+- **Rate Limiting**: Comprehensive rate limiting on authentication endpoints
+  - Team invitations: 20/hour per user
+  - MFA operations: 10/15min per user  
+  - Admin endpoints: 100/hour per IP
+  - Redis-backed with memory fallback
+  - Standard HTTP headers and security logging
 - CORS configuration
 - Environment variable management
 
@@ -102,6 +109,16 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 
 # Encryption (for API keys)
 ENCRYPTION_KEY=your_32_byte_encryption_key
+
+# Rate Limiting (optional)
+RATE_LIMIT_REDIS_URL=redis://localhost:6379
+RATE_LIMIT_REDIS_ENABLED=true
+RATE_LIMIT_TEAM_INVITE_MAX=20
+RATE_LIMIT_TEAM_INVITE_WINDOW_HOURS=1
+RATE_LIMIT_MFA_MAX=10
+RATE_LIMIT_MFA_WINDOW_MINUTES=15
+RATE_LIMIT_ADMIN_MAX=100
+RATE_LIMIT_ADMIN_WINDOW_HOURS=1
 ```
 
 ## Development
@@ -250,6 +267,7 @@ Additional dependencies to be added:
 
 - See `/client/BACKEND_DOCUMENTATION.md` for detailed API specifications
 - See `/client/New_Backend_Api_documentation.md` for API endpoint details
+- See `/backend/docs/RATE_LIMITING.md` for comprehensive rate limiting documentation
 - See main `/README.md` for project overview
 
 ## Notes

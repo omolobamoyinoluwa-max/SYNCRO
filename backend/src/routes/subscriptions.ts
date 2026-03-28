@@ -509,6 +509,164 @@ router.post("/:id/cancel", validateSubscriptionOwnership, async (req: Authentica
 });
 
 /**
+ * POST /api/subscriptions/:id/pause
+ * Pause subscription — skips reminders, risk scoring, and projected spend
+ * Body: { resumeAt?: string (ISO date), reason?: string }
+ */
+/**
+ * POST /api/subscriptions/:id/pause
+ * Pause subscription — skips reminders, risk scoring, and projected spend
+ * Body: { resumeAt?: string (ISO date), reason?: string }
+ */
+router.post("/:id/pause", validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const idempotencyKey = req.headers["idempotency-key"] as string;
+    const requestHash = idempotencyService.hashRequest(req.body);
+
+    if (idempotencyKey) {
+      const idempotencyCheck = await idempotencyService.checkIdempotency(
+        idempotencyKey,
+        req.user!.id,
+        requestHash,
+      );
+
+      if (idempotencyCheck.isDuplicate && idempotencyCheck.cachedResponse) {
+        return res
+          .status(idempotencyCheck.cachedResponse.status)
+          .json(idempotencyCheck.cachedResponse.body);
+      }
+    }
+
+    const pauseSchema = z.object({
+      resumeAt: z.string().datetime({ offset: true }).optional(),
+      reason: z.string().max(500).optional(),
+    });
+
+    const validation = pauseSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((e) => e.message).join(", "),
+      });
+    }
+
+    const { resumeAt, reason } = validation.data;
+
+    if (resumeAt && new Date(resumeAt) <= new Date()) {
+      return res.status(400).json({
+        success: false,
+        error: "resumeAt must be a future date",
+      });
+    }
+
+    const result = await subscriptionService.pauseSubscription(
+      req.user!.id,
+      req.params.id,
+      resumeAt,
+      reason,
+    );
+
+    const responseBody = {
+      success: true,
+      data: result.subscription,
+      blockchain: {
+        synced: result.syncStatus === "synced",
+        transactionHash: result.blockchainResult?.transactionHash,
+        error: result.blockchainResult?.error,
+      },
+    };
+
+    const statusCode = result.syncStatus === "failed" ? 207 : 200;
+
+    if (idempotencyKey) {
+      await idempotencyService.storeResponse(
+        idempotencyKey,
+        req.user!.id,
+        requestHash,
+        statusCode,
+        responseBody,
+      );
+    }
+
+    res.status(statusCode).json(responseBody);
+  } catch (error) {
+    logger.error("Pause subscription error:", error);
+    const statusCode =
+      error instanceof Error && error.message.includes("not found") ? 404
+      : error instanceof Error && error.message.includes("already paused") ? 409
+      : 500;
+    res.status(statusCode).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to pause subscription",
+    });
+  }
+});
+
+/**
+ * POST /api/subscriptions/:id/resume
+ * Resume a paused subscription — re-enables reminders and risk scoring
+ */
+router.post("/:id/resume", validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const idempotencyKey = req.headers["idempotency-key"] as string;
+    const requestHash = idempotencyService.hashRequest(req.body);
+
+    if (idempotencyKey) {
+      const idempotencyCheck = await idempotencyService.checkIdempotency(
+        idempotencyKey,
+        req.user!.id,
+        requestHash,
+      );
+
+      if (idempotencyCheck.isDuplicate && idempotencyCheck.cachedResponse) {
+        return res
+          .status(idempotencyCheck.cachedResponse.status)
+          .json(idempotencyCheck.cachedResponse.body);
+      }
+    }
+
+    const result = await subscriptionService.resumeSubscription(
+      req.user!.id,
+      req.params.id,
+    );
+
+    const responseBody = {
+      success: true,
+      data: result.subscription,
+      blockchain: {
+        synced: result.syncStatus === "synced",
+        transactionHash: result.blockchainResult?.transactionHash,
+        error: result.blockchainResult?.error,
+      },
+    };
+
+    const statusCode = result.syncStatus === "failed" ? 207 : 200;
+
+    if (idempotencyKey) {
+      await idempotencyService.storeResponse(
+        idempotencyKey,
+        req.user!.id,
+        requestHash,
+        statusCode,
+        responseBody,
+      );
+    }
+
+    res.status(statusCode).json(responseBody);
+  } catch (error) {
+    logger.error("Resume subscription error:", error);
+    const statusCode =
+      error instanceof Error && error.message.includes("not found") ? 404
+      : error instanceof Error && error.message.includes("not paused") ? 409
+      : 500;
+    res.status(statusCode).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Failed to resume subscription",
+    });
+  }
+});
+
+/**
  * POST /api/subscriptions/bulk
  * Bulk operations (delete, update status, etc.)
  */
