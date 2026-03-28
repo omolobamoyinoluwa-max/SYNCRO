@@ -153,7 +153,7 @@ router.post('/invite', createTeamInviteLimiter(), async (req: AuthenticatedReque
       .from('team_members')
       .select('id')
       .eq('team_id', ctx.teamId)
-      .eq('user_id', (await supabase.auth.admin.getUserByEmail(email))?.data?.user?.id ?? '')
+      .eq('user_id', (await (supabase.auth.admin as any)?.getUserByEmail?.(email))?.data?.user?.id ?? '')
       .limit(1)
       .single();
 

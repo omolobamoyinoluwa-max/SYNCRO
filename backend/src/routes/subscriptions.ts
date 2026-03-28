@@ -67,23 +67,26 @@ router.use(authenticate);
  */
 router.get("/", async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { status, category, limit, offset } = req.query;
+    const { status, category, limit, offset } = req.query as Record<string, unknown>;
+
+    const allowedStatuses = new Set(['active','expired','cancelled','paused','trial']);
+    const normalizedStatus =
+      typeof status === 'string' && allowedStatuses.has(status) ? (status as any) : undefined;
+    const normalizedCategory = typeof category === 'string' ? category : undefined;
+    const lim = typeof limit === 'string' ? parseInt(limit) : undefined;
+    const off = typeof offset === 'string' ? parseInt(offset) : undefined;
 
     const result = await subscriptionService.listSubscriptions(req.user!.id, {
-      status: status as string | undefined,
-      category: category as string | undefined,
-      limit: limit ? parseInt(limit as string) : undefined,
-      offset: offset ? parseInt(offset as string) : undefined,
+      status: normalizedStatus,
+      category: normalizedCategory,
+      limit: lim,
+      offset: off,
     });
 
     res.json({
       success: true,
       data: result.subscriptions,
-      pagination: {
-        total: result.total,
-        limit: limit ? parseInt(limit as string) : undefined,
-        offset: offset ? parseInt(offset as string) : undefined,
-      },
+      pagination: { total: result.total, limit: lim, offset: off },
     });
   } catch (error) {
     logger.error("List subscriptions error:", error);
@@ -430,7 +433,7 @@ router.post("/:id/retry-sync", validateSubscriptionOwnership, async (req: Authen
 router.get("/:id/cooldown-status", validateSubscriptionOwnership, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const cooldownStatus = await subscriptionService.checkRenewalCooldown(
-      req.params.id,
+      Array.isArray(req.params.id) ? req.params.id[0] : req.params.id,
     );
 
     res.json({
@@ -481,7 +484,7 @@ router.post("/:id/cancel", validateSubscriptionOwnership, async (req: Authentica
 
     const result = await subscriptionService.cancelSubscription(
       req.user!.id,
-      req.params.id,
+      Array.isArray(req.params.id) ? req.params.id[0] : req.params.id,
     );
 
     const responseBody = {
@@ -576,7 +579,7 @@ router.post("/:id/pause", validateSubscriptionOwnership, async (req: Authenticat
 
     const result = await subscriptionService.pauseSubscription(
       req.user!.id,
-      req.params.id,
+      Array.isArray(req.params.id) ? req.params.id[0] : req.params.id,
       resumeAt,
       reason,
     );
@@ -642,7 +645,7 @@ router.post("/:id/resume", validateSubscriptionOwnership, async (req: Authentica
 
     const result = await subscriptionService.resumeSubscription(
       req.user!.id,
-      req.params.id,
+      Array.isArray(req.params.id) ? req.params.id[0] : req.params.id,
     );
 
     const responseBody = {

@@ -91,7 +91,11 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
       });
     }
 
-    const webhook = await webhookService.updateWebhook(req.user!.id, req.params.id, req.body);
+    const webhook = await webhookService.updateWebhook(
+      req.user!.id,
+      Array.isArray(req.params.id) ? req.params.id[0] : req.params.id,
+      req.body
+    );
     res.json({
       success: true,
       data: webhook,
@@ -111,7 +115,10 @@ router.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
  */
 router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    await webhookService.deleteWebhook(req.user!.id, req.params.id);
+    await webhookService.deleteWebhook(
+      req.user!.id,
+      Array.isArray(req.params.id) ? req.params.id[0] : req.params.id
+    );
     res.json({
       success: true,
       message: 'Webhook deleted',
@@ -131,7 +138,10 @@ router.delete('/:id', async (req: AuthenticatedRequest, res: Response) => {
  */
 router.post('/:id/test', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const delivery = await webhookService.triggerTestEvent(req.user!.id, req.params.id);
+    const delivery = await webhookService.triggerTestEvent(
+      req.user!.id,
+      Array.isArray(req.params.id) ? req.params.id[0] : req.params.id
+    );
     res.json({
       success: true,
       data: delivery,
@@ -151,7 +161,10 @@ router.post('/:id/test', async (req: AuthenticatedRequest, res: Response) => {
  */
 router.get('/:id/deliveries', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const deliveries = await webhookService.getDeliveries(req.user!.id, req.params.id);
+    const deliveries = await webhookService.getDeliveries(
+      req.user!.id,
+      Array.isArray(req.params.id) ? req.params.id[0] : req.params.id
+    );
     res.json({
       success: true,
       data: deliveries,

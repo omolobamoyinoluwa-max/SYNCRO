@@ -14,6 +14,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@stellar/stellar-sdk": "^14.5.0",
     "@supabase/supabase-js": "^2.47.10",
     "@types/cookie-parser": "^1.4.10",
     "@types/multer": "^2.1.0",
@@ -24,6 +25,7 @@
     "dotenv": "^16.4.5",
     "express": "^5.2.1",
     "express-rate-limit": "^8.3.1",
+    "ical-generator": "^9.0.0",
     "jsonwebtoken": "^8.5.1",
     "multer": "^2.1.1",
     "node-cron": "^3.0.3",
@@ -37,7 +39,6 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@stellar/stellar-sdk": "^14.5.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/express": "^5.0.0",
     "@types/express-rate-limit": "^5.1.3",

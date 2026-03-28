@@ -299,6 +299,71 @@ export class SubscriptionService {
   }
 
   //  Delete subscription with blockchain sync
+  async deleteSubscription(
+    userId: string,
+    subscriptionId: string,
+  ): Promise<SubscriptionSyncResult> {
+    return await DatabaseTransaction.execute(async (client) => {
+      // Verify exists and ownership
+      const { data: existing, error: fetchError } = await client
+        .from("subscriptions")
+        .select("*")
+        .eq("id", subscriptionId)
+        .eq("user_id", userId)
+        .single();
+      if (fetchError || !existing) {
+        throw new Error("Subscription not found or access denied");
+      }
+
+      // Delete the subscription
+      const { data: deleted, error: delError } = await client
+        .from("subscriptions")
+        .delete()
+        .eq("id", subscriptionId)
+        .eq("user_id", userId)
+        .select()
+        .single();
+
+      if (delError) {
+        throw new Error(`Delete failed: ${delError.message}`);
+      }
+
+      // Attempt blockchain sync
+      let blockchainResult: BlockchainSyncResult | undefined;
+      let syncStatus: "synced" | "partial" | "failed" = "synced";
+      try {
+        blockchainResult = await blockchainService.syncSubscription(
+          userId,
+          subscriptionId,
+          "delete",
+          existing,
+        );
+        if (!blockchainResult.success) {
+          syncStatus = "partial";
+          logger.warn("Blockchain sync failed for subscription delete", {
+            subscriptionId,
+            error: blockchainResult.error,
+          });
+        }
+      } catch (blockchainError) {
+        syncStatus = "partial";
+        logger.error("Blockchain sync error (non-fatal):", blockchainError);
+        blockchainResult = {
+          success: false,
+          error:
+            blockchainError instanceof Error
+              ? blockchainError.message
+              : String(blockchainError),
+        };
+      }
+
+      return {
+        subscription: deleted as Subscription,
+        blockchainResult,
+        syncStatus,
+      };
+    });
+  }
 
   async pauseSubscription(
   userId: string,

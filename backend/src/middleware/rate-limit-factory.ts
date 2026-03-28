@@ -86,11 +86,14 @@ export class RateLimiterFactory {
       windowMs: rateLimitConfig.teamInvite.windowMs,
       max: rateLimitConfig.teamInvite.max,
       message: rateLimitConfig.teamInvite.message,
-      standardHeaders: rateLimitConfig.teamInvite.standardHeaders,
-      legacyHeaders: rateLimitConfig.teamInvite.legacyHeaders,
+      standardHeaders: true,
+      legacyHeaders: true,
       keyGenerator: userKeyGenerator,
       store: this.redisStore || undefined,
-      onLimitReached: createRateLimitHandler('team-invite'),
+      handler: (req, res, _next) => {
+        createRateLimitHandler('team-invite')(req, res);
+        res.status(429).json(rateLimitConfig.teamInvite.message);
+      },
       // Skip rate limiting for non-authenticated requests (they'll fail auth anyway)
       skip: (req) => {
         const authReq = req as AuthenticatedRequest;
@@ -108,11 +111,14 @@ export class RateLimiterFactory {
       windowMs: rateLimitConfig.mfa.windowMs,
       max: rateLimitConfig.mfa.max,
       message: rateLimitConfig.mfa.message,
-      standardHeaders: rateLimitConfig.mfa.standardHeaders,
-      legacyHeaders: rateLimitConfig.mfa.legacyHeaders,
+      standardHeaders: true,
+      legacyHeaders: true,
       keyGenerator: userKeyGenerator,
       store: this.redisStore || undefined,
-      onLimitReached: createRateLimitHandler('mfa'),
+      handler: (req, res, _next) => {
+        createRateLimitHandler('mfa')(req, res);
+        res.status(429).json(rateLimitConfig.mfa.message);
+      },
       // Skip rate limiting for non-authenticated requests
       skip: (req) => {
         const authReq = req as AuthenticatedRequest;
@@ -130,11 +136,14 @@ export class RateLimiterFactory {
       windowMs: rateLimitConfig.admin.windowMs,
       max: rateLimitConfig.admin.max,
       message: rateLimitConfig.admin.message,
-      standardHeaders: rateLimitConfig.admin.standardHeaders,
-      legacyHeaders: rateLimitConfig.admin.legacyHeaders,
+      standardHeaders: true,
+      legacyHeaders: true,
       keyGenerator: ipKeyGenerator,
       store: this.redisStore || undefined,
-      onLimitReached: createRateLimitHandler('admin'),
+      handler: (req, res, _next) => {
+        createRateLimitHandler('admin')(req, res);
+        res.status(429).json(rateLimitConfig.admin.message);
+      },
     });
   }
 
@@ -153,10 +162,13 @@ export class RateLimiterFactory {
       max: config.max,
       message: config.message,
       standardHeaders: true,
-      legacyHeaders: false,
+      legacyHeaders: true,
       keyGenerator: config.keyGenerator || ipKeyGenerator,
       store: this.redisStore || undefined,
-      onLimitReached: createRateLimitHandler(config.endpointType),
+      handler: (req, res, _next) => {
+        createRateLimitHandler(config.endpointType)(req, res);
+        res.status(429).json(config.message);
+      },
     });
   }
 
