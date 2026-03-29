@@ -3,6 +3,7 @@ import { supabase } from '../config/database';
 import { reorgHandler } from './reorg-handler';
 import { generateCycleId } from '../utils/cycle-id';
 import { renewalCooldownService } from './renewal-cooldown-service';
+import { calculateBackoffDelay, NonRetryableError } from '../utils/retry';
 
 interface ContractEvent {
   type: string;
@@ -21,6 +22,20 @@ interface ProcessedEvent {
   event_data: any;
 }
 
+export type EventListenerStatus = 'running' | 'stopped' | 'disabled' | 'retrying' | 'failed';
+
+export interface EventListenerHealth {
+  status: EventListenerStatus;
+  reason?: string;
+  lastProcessedLedger: number | null;
+  retryCount?: number;
+  nextRetryAt?: string | null;
+}
+
+const MAX_RETRY_ATTEMPTS = 10;
+const RETRY_INITIAL_DELAY_MS = 5000;
+const RETRY_MAX_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+
 export class EventListener {
   private contractId: string;
   private rpcUrl: string;
@@ -28,19 +43,48 @@ export class EventListener {
   private isRunning: boolean = false;
   private pollInterval: number = 5000;
 
+  // Health tracking
+  private _status: EventListenerStatus = 'stopped';
+  private _disabledReason?: string;
+  private _retryCount: number = 0;
+  private _nextRetryAt: Date | null = null;
+
   constructor() {
     this.contractId = process.env.SOROBAN_CONTRACT_ADDRESS || '';
     this.rpcUrl = process.env.STELLAR_NETWORK_URL || 'https://soroban-testnet.stellar.org';
 
     if (!this.contractId) {
-      throw new Error('SOROBAN_CONTRACT_ADDRESS not configured');
+      // Don't throw — mark as disabled so the process can still start
+      this._status = 'disabled';
+      this._disabledReason = 'SOROBAN_CONTRACT_ADDRESS not configured';
+      logger.warn('EventListener disabled: SOROBAN_CONTRACT_ADDRESS not configured');
     }
   }
 
+  getHealth(): EventListenerHealth {
+    return {
+      status: this._status,
+      reason: this._disabledReason,
+      lastProcessedLedger: this.lastProcessedLedger || null,
+      retryCount: this._retryCount,
+      nextRetryAt: this._nextRetryAt?.toISOString() ?? null,
+    };
+  }
+
   async start() {
+    if (this._status === 'disabled') {
+      logger.warn('EventListener.start() called but listener is disabled', {
+        reason: this._disabledReason,
+      });
+      return;
+    }
+
     if (this.isRunning) return;
 
     this.isRunning = true;
+    this._status = 'running';
+    this._retryCount = 0;
+    this._nextRetryAt = null;
     this.lastProcessedLedger = await this.getLastProcessedLedger();
     logger.info('Event listener started', { lastLedger: this.lastProcessedLedger });
 
@@ -49,6 +93,9 @@ export class EventListener {
 
   stop() {
     this.isRunning = false;
+    if (this._status !== 'disabled') {
+      this._status = 'stopped';
+    }
     logger.info('Event listener stopped');
   }
 
@@ -56,11 +103,52 @@ export class EventListener {
     while (this.isRunning) {
       try {
         await this.fetchAndProcessEvents();
+        // Reset retry count on success
+        if (this._retryCount > 0) {
+          logger.info('EventListener recovered after retries', { retryCount: this._retryCount });
+          this._retryCount = 0;
+          this._nextRetryAt = null;
+        }
+        this._status = 'running';
       } catch (error) {
         logger.error('Event polling error:', error);
+        await this.handlePollError(error);
+        if (!this.isRunning) break;
       }
       await this.sleep(this.pollInterval);
     }
+  }
+
+  private async handlePollError(error: unknown) {
+    this._retryCount++;
+
+    if (this._retryCount >= MAX_RETRY_ATTEMPTS) {
+      this._status = 'failed';
+      this._disabledReason = `Exceeded max retry attempts (${MAX_RETRY_ATTEMPTS}). Last error: ${error instanceof Error ? error.message : String(error)}`;
+      logger.error('EventListener permanently failed after max retries', {
+        retryCount: this._retryCount,
+        error: this._disabledReason,
+      });
+      this.isRunning = false;
+      return;
+    }
+
+    const delay = calculateBackoffDelay(this._retryCount, {
+      initialDelay: RETRY_INITIAL_DELAY_MS,
+      maxDelay: RETRY_MAX_DELAY_MS,
+      multiplier: 2,
+      jitter: true,
+    });
+
+    this._status = 'retrying';
+    this._nextRetryAt = new Date(Date.now() + delay);
+    logger.warn('EventListener will retry', {
+      attempt: this._retryCount,
+      delayMs: delay,
+      nextRetryAt: this._nextRetryAt.toISOString(),
+    });
+
+    await this.sleep(delay);
   }
 
   private async fetchAndProcessEvents() {

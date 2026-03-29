@@ -118,7 +118,7 @@ app.get('/api/admin/metrics/activity', createAdminLimiter(), adminAuth, async (r
 app.get('/api/admin/health', createAdminLimiter(), adminAuth, async (req, res) => {
   try {
     const includeHistory = req.query.history !== 'false';
-    const health = await healthService.getAdminHealth(includeHistory);
+    const health = await healthService.getAdminHealth(includeHistory, eventListener.getHealth());
     const statusCode = health.status === 'unhealthy' ? 503 : 200;
     res.status(statusCode).json(health);
   } catch (error) {
@@ -216,6 +216,14 @@ const server = app.listen(PORT, async () => {
   logger.info(`Server running on port ${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
 
+  // Validate critical env vars at startup — warn clearly so operators know what's missing
+  const criticalEnvVars = ['SOROBAN_CONTRACT_ADDRESS', 'SOROBAN_RPC_URL'];
+  for (const envVar of criticalEnvVars) {
+    if (!process.env[envVar]) {
+      logger.warn(`${envVar} not configured — EventListener will be disabled`);
+    }
+  }
+
   // Initialize rate limiting Redis store
   try {
     await RateLimiterFactory.initializeRedisStore();
@@ -230,10 +238,14 @@ const server = app.listen(PORT, async () => {
   // Start health metrics snapshot loop
   startHealthSnapshotInterval();
 
-  // Start event listener
-  eventListener.start().catch(err => {
-    logger.error('Failed to start event listener:', err);
-  });
+  // Start event listener (no-op if disabled due to missing config)
+  await eventListener.start();
+  const elHealth = eventListener.getHealth();
+  if (elHealth.status === 'disabled') {
+    logger.warn('EventListener is disabled', { reason: elHealth.reason });
+  } else {
+    logger.info('EventListener started', { status: elHealth.status });
+  }
 
   scheduleAutoResume();
 });

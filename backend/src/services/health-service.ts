@@ -1,6 +1,7 @@
 import { supabase } from '../config/database';
 import logger from '../config/logger';
 import { monitoringService } from './monitoring-service';
+import type { EventListenerHealth } from './event-listener';
 
 export interface HealthThresholds {
   failedRenewalsPerHour: number;
@@ -45,6 +46,7 @@ export interface AdminHealthResponse {
   metrics: CurrentHealthMetrics;
   alerts: HealthAlert[];
   thresholds: HealthThresholds;
+  eventListener: EventListenerHealth;
   history?: HealthSnapshot[];
 }
 
@@ -233,11 +235,38 @@ export class HealthService {
   }
 
   /**
-   * Full admin health: current metrics, alerts, status, optional history.
+   * Full admin health: current metrics, alerts, status, event listener state, optional history.
    */
-  async getAdminHealth(includeHistory: boolean = true): Promise<AdminHealthResponse> {
+  async getAdminHealth(includeHistory: boolean = true, eventListenerHealth?: EventListenerHealth): Promise<AdminHealthResponse> {
     const metrics = await this.getCurrentMetrics();
     const alerts = this.evaluateAlerts(metrics);
+
+    // Degrade overall status if event listener is not running
+    const elHealth: EventListenerHealth = eventListenerHealth ?? {
+      status: 'stopped',
+      lastProcessedLedger: null,
+    };
+
+    if (elHealth.status === 'disabled' || elHealth.status === 'failed') {
+      alerts.push({
+        id: 'event_listener',
+        message: `EventListener is ${elHealth.status}: ${elHealth.reason ?? 'unknown reason'}`,
+        severity: elHealth.status === 'failed' ? 'critical' : 'warning',
+        value: 0,
+        threshold: 0,
+        triggeredAt: new Date().toISOString(),
+      });
+    } else if (elHealth.status === 'retrying') {
+      alerts.push({
+        id: 'event_listener',
+        message: `EventListener is retrying (attempt ${elHealth.retryCount ?? '?'})`,
+        severity: 'warning',
+        value: elHealth.retryCount ?? 0,
+        threshold: 0,
+        triggeredAt: new Date().toISOString(),
+      });
+    }
+
     const status = this.getStatus(alerts);
     const history = includeHistory ? await this.getHistory(24) : undefined;
 
@@ -247,6 +276,7 @@ export class HealthService {
       metrics,
       alerts,
       thresholds: this.getThresholds(),
+      eventListener: elHealth,
       history,
     };
   }
