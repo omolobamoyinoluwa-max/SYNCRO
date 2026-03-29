@@ -208,42 +208,24 @@ const server = app.listen(PORT, async () => {
     logger.info('Rate limiting initialized successfully');
   } catch (error) {
     logger.warn('Rate limiting initialization failed, using memory store:', error);
+import * as bip39 from 'bip39';
+/**
+ * Generates a standard BIP39 12-word mnemonic phrase.
+ */
+export function generateMnemonic(): string {
+  return bip39.generateMnemonic(128);
+/**
+ * Validates a 12-word BIP39 mnemonic phrase.
+ */
+export function validateMnemonic(mnemonic: string): boolean {
+  if (!mnemonic || typeof mnemonic !== 'string') {
+    return false;
   }
 
-  // Start scheduler
-  schedulerService.start();
+  const words = mnemonic.trim().split(/\s+/);
+  if (words.length !== 12) {
+    return false;
+  }
 
-  // Start health metrics snapshot loop
-  startHealthSnapshotInterval();
-
-  // Start event listener
-  eventListener.start().catch(err => {
-    logger.error('Failed to start event listener:', err);
-  });
-
-  scheduleAutoResume();
-});
-
-
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM received, shutting down gracefully');
-  schedulerService.stop();
-  eventListener.stop();
-  server.close(() => {
-    logger.info('Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  schedulerService.stop();
-  eventListener.stop();
-  server.close(() => {
-    logger.info('Server closed');
-    process.exit(0);
-  });
-});
-
+  return bip39.validateMnemonic(words.join(' '));
+}

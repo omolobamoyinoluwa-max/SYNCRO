@@ -117,6 +117,7 @@ class AuditLogger {
    * Flush queued audit events to backend
    */
   public async flushAuditQueue(): Promise<void> {
+  async flushAuditQueue(): Promise<void> {
     if (this.auditQueue.length === 0) {
       return
     }
@@ -295,6 +296,15 @@ export function logAuthAction(
   })
 }
 
+export function logDataExport(userId: string, format: string, recordCount: number): void {
+  auditLogger.log({
+    userId,
+    action: "export",
+    resource: "data",
+    details: { format, recordCount },
+  })
+}
+
 export function logTeamAction(
   userId: string,
   action: "add_member" | "remove_member" | "update_role",
@@ -307,14 +317,5 @@ export function logTeamAction(
     resource: "team",
     resourceId: memberId,
     details,
-  })
-}
-
-export function logDataExport(userId: string, format: string, recordCount: number): void {
-  auditLogger.log({
-    userId,
-    action: "export",
-    resource: "data",
-    details: { format, recordCount },
   })
 }
