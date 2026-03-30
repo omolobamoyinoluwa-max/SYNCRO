@@ -6,6 +6,7 @@ import express, { Response, Router } from "express";
 import { riskDetectionService } from "../services/risk-detection/risk-detection-service";
 import { riskNotificationService } from "../services/risk-detection/risk-notification-service";
 import { authenticate, AuthenticatedRequest } from "../middleware/auth";
+import { adminAuth } from "../middleware/admin";
 import logger from "../config/logger";
 
 const router: Router = express.Router();
@@ -102,9 +103,22 @@ router.get("/", async (req: AuthenticatedRequest, res: Response) => {
 });
 
 /**
- * POST /api/risk-score/recalculate
+ * @openapi
+ * /api/risk-score/recalculate:
+ *   post:
+ *     tags: [Risk Score]
+ *     summary: Trigger risk recalculation for all subscriptions
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Recalculation result
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden - Admin access required
  */
-router.post("/recalculate", async (req: AuthenticatedRequest, res: Response) => {
+router.post("/recalculate", adminAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user?.id;
 
