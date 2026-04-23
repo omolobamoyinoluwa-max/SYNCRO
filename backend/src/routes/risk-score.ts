@@ -6,7 +6,9 @@ import { adminAuth } from '../middleware/admin';
 import { validateRequest } from '../utils/validation';
 import { NotFoundError } from '../errors';
 
-const router = express.Router();
+const router: express.Router = express.Router();
+
+// Apply authentication to all routes
 router.use(authenticate);
 
 const subscriptionParamSchema = z.object({

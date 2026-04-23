@@ -4,7 +4,7 @@ import { supabase } from '../config/database';
 import crypto from 'crypto';
 import logger from '../config/logger';
 
-const router = Router();
+const router: Router = Router();
 const CALENDAR_SECRET = process.env.CALENDAR_SECRET || 'syncro-calendar-secret-key-123';
 
 /**

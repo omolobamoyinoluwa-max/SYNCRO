@@ -1,13 +1,14 @@
 import { Router, Request, Response } from 'express';
 import archiver from 'archiver';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { validate } from '../middleware/validate';
 import { complianceService } from '../services/compliance-service';
 import { supabase } from '../config/database';
 import logger from '../config/logger';
 import { RateLimiterFactory } from '../middleware/rate-limit-factory';
-import { BadRequestError, NotFoundError, ConflictError, UnauthorizedError } from '../errors';
+import { deleteAccountSchema, emailPreferencesSchema, KNOWN_OPT_IN_KEYS } from '../schemas/compliance';
 
-const router = Router();
+const router: Router = Router();
 
 // ─── XSS Helper ──────────────────────────────────────────────────────────────
 
@@ -18,7 +19,7 @@ function escapeHtml(str: string): string {
 // ─── Rate limiters ────────────────────────────────────────────────────────────
 
 const exportRateLimit = RateLimiterFactory.createCustomLimiter({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 1,
   message: { error: 'Export rate limit exceeded. Try again in 1 hour.' },
   keyGenerator: (req: any) => req.user?.id || req.ip,
@@ -54,7 +55,10 @@ function renderErrorPage(message: string): string {
 
 // ─── Token-based auth helper ─────────────────────────────────────────────────
 
-async function resolveUserFromTokenOrSession(req: Request, token?: string): Promise<string | null> {
+async function resolveUserFromTokenOrSession(
+  req: Request,
+  token?: string,
+): Promise<string | null> {
   if (token) {
     const result = complianceService.verifyUnsubscribeToken(token);
     return result.valid && result.userId ? result.userId : null;
@@ -86,38 +90,86 @@ router.get('/export', authenticate, exportRateLimit, async (req: AuthenticatedRe
   archive.on('error', (err) => logger.error('Archiver error:', err));
   archive.pipe(res);
 
-  // Append data files
-  archive.append(JSON.stringify(data.profile, null, 2), { name: 'profile.json' });
-  archive.append(JSON.stringify(data.subscriptions, null, 2), { name: 'subscriptions.json' });
-  archive.append(JSON.stringify(data.notifications, null, 2), { name: 'notifications.json' });
-  archive.append(JSON.stringify(data.auditLogs, null, 2), { name: 'audit_logs.json' });
-  archive.append(JSON.stringify(data.preferences, null, 2), { name: 'preferences.json' });
-  archive.append(JSON.stringify(data.emailAccounts, null, 2), { name: 'email_accounts.json' });
-  archive.append(JSON.stringify(data.teams, null, 2), { name: 'teams.json' });
-  archive.append(JSON.stringify(data.blockchainLogs, null, 2), { name: 'blockchain_logs.json' });
+    archive.on('error', (err) => {
+      logger.error('Archiver error during export:', err);
+    });
 
   await archive.finalize();
 
-  await supabase.from('audit_logs').insert({
-    user_id: userId,
-    action: 'data_export',
-    resource_type: 'account',
-    resource_id: userId,
-    metadata: { exported_at: new Date().toISOString() },
-  });
+    archive.append(JSON.stringify(data.profile, null, 2), { name: 'profile.json' });
+    archive.append(JSON.stringify(data.subscriptions, null, 2), { name: 'subscriptions.json' });
+    archive.append(JSON.stringify(data.notifications, null, 2), { name: 'notifications.json' });
+    archive.append(JSON.stringify(data.auditLogs, null, 2), { name: 'audit_logs.json' });
+    archive.append(JSON.stringify(data.preferences, null, 2), { name: 'preferences.json' });
+    archive.append(JSON.stringify(data.emailAccounts, null, 2), { name: 'email_accounts.json' });
+    archive.append(JSON.stringify(data.teams, null, 2), { name: 'teams.json' });
+    archive.append(JSON.stringify(data.blockchainLogs, null, 2), { name: 'blockchain_logs.json' });
+
+    const readme = [
+      'Syncro — Personal Data Export',
+      '==============================',
+      `Generated: ${new Date().toISOString()}`,
+      `User ID: ${userId}`,
+      '',
+      'Files included:',
+      '  profile.json        — Your account profile',
+      '  subscriptions.json  — All subscription records',
+      '  notifications.json  — Notification history',
+      '  audit_logs.json     — Account activity log',
+      '  preferences.json    — User preferences and email settings',
+      '  email_accounts.json — Connected email accounts',
+      '  teams.json          — Team membership records',
+      '  blockchain_logs.json — On-chain contract events and renewal approvals',
+      '',
+      'For questions or deletion requests, contact support.',
+    ].join('\n');
+
+    archive.append(readme, { name: 'README.txt' });
+
+    await archive.finalize();
+
+    await supabase.from('audit_logs').insert({
+      user_id: userId,
+      action: 'data_export',
+      resource_type: 'account',
+      resource_id: userId,
+      metadata: { exported_at: new Date().toISOString() },
+    });
+
+    logger.info(`Data export completed for user ${userId}`);
+  } catch (error) {
+    logger.error('Data export error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to export data',
+      });
+    }
+  }
 });
 
 // ─── Account Deletion ─────────────────────────────────────────────────────────
 
-router.post('/account/delete', authenticate, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const result = await complianceService.requestDeletion(req.user!.id, req.body.reason);
-    res.json({ success: true, data: result });
-  } catch (error: any) {
-    if (error.message?.includes('already pending')) throw new ConflictError(error.message);
-    throw error;
-  }
-});
+router.post(
+  '/account/delete',
+  authenticate,
+  validate(deleteAccountSchema),
+  async (req: AuthenticatedRequest, res: Response) => {
+    const userId = req.user!.id;
+    try {
+      const { reason } = req.body;
+      const result = await complianceService.requestDeletion(userId, reason);
+      res.json({ success: true, data: result });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to request deletion';
+      if (message.includes('already pending')) {
+        return res.status(409).json({ success: false, error: message });
+      }
+      logger.error('Account deletion request error:', error);
+      res.status(500).json({ success: false, error: message });
+    }
+  },
+);
 
 router.post('/account/delete/cancel', authenticate, async (req: AuthenticatedRequest, res: Response) => {
   const result = await complianceService.cancelDeletion(req.user!.id);
@@ -160,7 +212,7 @@ router.post('/unsubscribe', async (req: Request, res: Response) => {
 
 // ─── Email Preferences API ────────────────────────────────────────────────────
 
-const KNOWN_OPT_IN_KEYS = ['reminders', 'marketing', 'updates', 'digests'] as const;
+type OptInKey = typeof KNOWN_OPT_IN_KEYS[number];
 
 router.get('/email-preferences', async (req: Request, res: Response) => {
   const token = req.query.token as string | undefined;
@@ -173,26 +225,54 @@ router.get('/email-preferences', async (req: Request, res: Response) => {
   res.json({ success: true, data: { email_opt_ins: prefs?.email_opt_ins ?? {} } });
 });
 
-router.patch('/email-preferences', async (req: Request, res: Response) => {
-  const token = req.body.token as string | undefined;
-  const userId = await resolveUserFromTokenOrSession(req, token);
-  if (!userId) throw new UnauthorizedError();
+router.patch(
+  '/email-preferences',
+  validate(emailPreferencesSchema),
+  async (req: Request, res: Response) => {
+    const token = req.body.token as string | undefined;
+    const userId = await resolveUserFromTokenOrSession(req, token);
 
-  const updates: Record<string, boolean> = {};
-  for (const key of KNOWN_OPT_IN_KEYS) {
-    if (typeof req.body[key] === 'boolean') updates[key] = req.body[key];
-  }
+    if (!userId) {
+      res.status(401).json({ success: false, error: 'Unauthorized' });
+      return;
+    }
 
-  if (Object.keys(updates).length === 0) throw new BadRequestError(`Allowed keys: ${KNOWN_OPT_IN_KEYS.join(', ')}`);
+    const updates: Partial<Record<OptInKey, boolean>> = {};
+    for (const key of KNOWN_OPT_IN_KEYS) {
+      if (key in req.body && typeof req.body[key] === 'boolean') {
+        updates[key] = req.body[key];
+      }
+    }
 
-  const { data: prefs } = await supabase.from('user_preferences').select('email_opt_ins').eq('user_id', userId).single();
-  const currentOptIns = (prefs?.email_opt_ins as Record<string, boolean>) || {};
-  const merged = { ...currentOptIns, ...updates };
+    try {
+      const { data: prefs } = await supabase
+        .from('user_preferences')
+        .select('email_opt_ins')
+        .eq('user_id', userId)
+        .single();
 
-  const { data, error } = await supabase.from('user_preferences').upsert({ user_id: userId, email_opt_ins: merged }, { onConflict: 'user_id' }).select('email_opt_ins').single();
-  if (error) throw error;
+      const currentOptIns: Record<string, boolean> = (prefs?.email_opt_ins as Record<string, boolean>) || {};
+      const merged = { ...currentOptIns, ...updates };
 
-  res.json({ success: true, data: { email_opt_ins: data?.email_opt_ins ?? merged } });
-});
+      const { data, error } = await supabase
+        .from('user_preferences')
+        .upsert({ user_id: userId, email_opt_ins: merged }, { onConflict: 'user_id' })
+        .select('email_opt_ins')
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      res.json({ success: true, data: { email_opt_ins: data?.email_opt_ins ?? merged } });
+    } catch (error) {
+      logger.error('Update email preferences error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update email preferences',
+      });
+    }
+  },
+);
 
 export default router;

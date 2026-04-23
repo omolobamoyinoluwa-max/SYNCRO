@@ -3,23 +3,13 @@ import { z } from 'zod';
 import crypto from 'crypto';
 import { supabase } from '../config/database';
 import { authenticate, AuthenticatedRequest, requireScope } from '../middleware/auth';
-import { validateRequest } from '../utils/validation';
-import { NotFoundError, BadRequestError } from '../errors';
+import { validate } from '../middleware/validate';
+import logger from '../config/logger';
+import { createApiKeySchema } from '../schemas/api-key';
 
-const router = Router();
+const router: Router = Router();
+
 router.use(authenticate);
-
-const VALID_SCOPES = ['subscriptions:read', 'subscriptions:write', 'webhooks:write', 'analytics:read'] as const;
-
-const createApiKeySchema = z.object({
-  name: z.string().min(1, 'Service name is required').max(100),
-  scopes: z.union([
-    z.array(z.enum(VALID_SCOPES)),
-    z.string().transform((val) => val.split(',').map((s) => s.trim()) as any[]),
-  ]).refine((val) => val.length > 0, { message: 'At least one valid scope is required' }),
-});
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function generateApiKey(): { key: string; hash: string } {
   const key = `sk_${crypto.randomBytes(32).toString('hex')}`;
@@ -27,34 +17,51 @@ function generateApiKey(): { key: string; hash: string } {
   return { key, hash };
 }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
-
 /**
- * POST /api/api-keys
+ * POST /api/keys
+ * Create a new API key
  */
-router.post('/', requireScope('subscriptions:write'), async (req: AuthenticatedRequest, res: Response) => {
-  const { name, scopes } = validateRequest(createApiKeySchema, req.body);
-  const { key, hash } = generateApiKey();
+router.post(
+  '/',
+  requireScope('subscriptions:write'),
+  validate(createApiKeySchema),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      if (!req.user?.id) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
 
-  const { error } = await supabase.from('api_keys').insert([
-    {
-      user_id: req.user!.id,
-      service_name: name,
-      key_hash: hash,
-      scopes,
-      revoked: false,
-      last_used_at: null,
-      request_count: 0,
-    },
-  ]);
+      const { name, scopes } = req.body;
+      const { key, hash } = generateApiKey();
 
-  if (error) throw error;
+      const { error } = await supabase.from('api_keys').insert([
+        {
+          user_id: req.user.id,
+          service_name: name,
+          key_hash: hash,
+          scopes,
+          revoked: false,
+          last_used_at: null,
+          request_count: 0,
+        },
+      ]);
 
-  res.status(201).json({ success: true, key, scopes });
-});
+      if (error) {
+        logger.error('Failed to create API key', { error });
+        return res.status(500).json({ error: 'Failed to create API key' });
+      }
+
+      return res.status(201).json({ success: true, key, scopes });
+    } catch (error) {
+      logger.error('Create API key error:', error);
+      return res.status(500).json({ error: String(error) || 'Internal server error' });
+    }
+  },
+);
 
 /**
- * GET /api/api-keys
+ * GET /api/keys
+ * List API keys for the authenticated user
  */
 router.get('/', requireScope('subscriptions:read'), async (req: AuthenticatedRequest, res: Response) => {
   const { data, error } = await supabase
@@ -69,7 +76,7 @@ router.get('/', requireScope('subscriptions:read'), async (req: AuthenticatedReq
 });
 
 /**
- * DELETE /api/api-keys/:id
+ * DELETE /api/keys/:id
  * Revoke an API key
  */
 router.delete('/:id', requireScope('subscriptions:write'), async (req: AuthenticatedRequest, res: Response) => {
@@ -96,7 +103,8 @@ router.delete('/:id', requireScope('subscriptions:write'), async (req: Authentic
 });
 
 /**
- * GET /api/api-keys/:id/usage
+ * GET /api/keys/:id/usage
+ * Get usage stats for an API key
  */
 router.get('/:id/usage', requireScope('subscriptions:read'), async (req: AuthenticatedRequest, res: Response) => {
   const { data, error } = await supabase
