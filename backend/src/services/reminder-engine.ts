@@ -226,7 +226,9 @@ export class ReminderEngine {
         return;
       }
 
-      const renewalDate = subscription.active_until || new Date().toISOString();
+      const renewalDate = reminder.reminder_type === 'trial_expiry'
+        ? (subscription.trial_ends_at || new Date().toISOString())
+        : (subscription.active_until || new Date().toISOString());
       const payload: NotificationPayload = {
         title: `${subscription.name} Renewal Reminder`,
         body: `${subscription.name} will renew in ${reminder.days_before} day${reminder.days_before > 1 ? 's' : ''}`,

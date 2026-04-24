@@ -8,6 +8,14 @@ export interface SubscriptionMetrics {
     total_monthly_revenue: number;
 }
 
+export interface TrialMetrics {
+    active_trials: number;
+    trials_expiring_in_7_days: number;
+    saved_by_syncro: number;       // trials cancelled before auto-charge after receiving a reminder
+    intentional_conversions: number;
+    automatic_conversions: number;
+}
+
 export interface RenewalMetrics {
     total_delivery_attempts: number;
     success_rate: number;
@@ -163,6 +171,52 @@ export class MonitoringService {
                 failed_blockchain_events: bcLogs?.filter((l: any) => l.status === 'failed').length || 0,
             };
         })());
+    }
+
+    /**
+     * Get trial-specific metrics including "saved by SYNCRO" count
+     */
+    async getTrialMetrics(): Promise<TrialMetrics> {
+      try {
+        const now = new Date().toISOString();
+        const in7Days = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+        const [
+          { count: activeTrials },
+          { count: expiringTrials },
+          { data: conversionEvents },
+        ] = await Promise.all([
+          supabase
+            .from('subscriptions')
+            .select('*', { count: 'exact', head: true })
+            .eq('is_trial', true)
+            .in('status', ['active', 'trial'])
+            .gt('trial_ends_at', now),
+          supabase
+            .from('subscriptions')
+            .select('*', { count: 'exact', head: true })
+            .eq('is_trial', true)
+            .in('status', ['active', 'trial'])
+            .gt('trial_ends_at', now)
+            .lte('trial_ends_at', in7Days),
+          supabase
+            .from('trial_conversion_events')
+            .select('conversion_type, saved_by_syncro'),
+        ]);
+
+        const events = conversionEvents ?? [];
+
+        return {
+          active_trials: activeTrials ?? 0,
+          trials_expiring_in_7_days: expiringTrials ?? 0,
+          saved_by_syncro: events.filter((e) => e.saved_by_syncro).length,
+          intentional_conversions: events.filter((e) => e.conversion_type === 'intentional').length,
+          automatic_conversions: events.filter((e) => e.conversion_type === 'automatic').length,
+        };
+      } catch (error) {
+        logger.error('Error fetching trial metrics:', error);
+        throw error;
+      }
     }
 }
 

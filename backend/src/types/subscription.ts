@@ -28,6 +28,11 @@ export interface Subscription {
   paused_at: string | null;
   resume_at: string | null;
   pause_reason: string | null;
+  // Trial tracking fields
+  is_trial: boolean;
+  trial_ends_at: string | null;
+  trial_converts_to_price: number | null;
+  credit_card_required: boolean;
 }
 
 export interface SubscriptionCreateInput {
@@ -47,6 +52,11 @@ export interface SubscriptionCreateInput {
   visibility?: 'private' | 'team';
   tags?: string[];
   email_account_id?: string;
+  // Trial fields
+  is_trial?: boolean;
+  trial_ends_at?: string;
+  trial_converts_to_price?: number;
+  credit_card_required?: boolean;
 }
 
 export interface SubscriptionUpdateInput {
@@ -67,6 +77,11 @@ export interface SubscriptionUpdateInput {
   paused_at?: string | null;
   resume_at?: string | null;
   pause_reason?: string | null;
+  // Trial fields
+  is_trial?: boolean;
+  trial_ends_at?: string | null;
+  trial_converts_to_price?: number | null;
+  credit_card_required?: boolean;
 }
 
 /** Allowlist of fields a user is permitted to update.
