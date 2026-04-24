@@ -20,29 +20,30 @@ const securityHeaders = {
  */
 function generateCSP(
   nonce: string,
-  reportOnly: boolean = true,
+  reportOnly: boolean = false,
 ): { headerName: string; policy: string } {
+  const isDev = process.env.NODE_ENV === 'development';
+
   const cspHeader = [
     `default-src 'self'`,
-    `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
-    `style-src 'self' 'nonce-${nonce}'`,
-    `img-src 'self' blob: data: https:`,
-    `font-src 'self'`,
-    `connect-src 'self' https://*.supabase.co https://api.stripe.com wss://*.supabase.co`,
-    `frame-src 'none'`,
+    `script-src 'self' 'nonce-${nonce}' ${isDev ? "'unsafe-eval'" : "'strict-dynamic'"}`,
+    `style-src 'self' 'unsafe-inline'`, // 'unsafe-inline' is needed for Tailwind/CSS-in-JS, nonce would disable it
+    `img-src 'self' blob: data: https://res.cloudinary.com https://*.supabase.co https://ui-avatars.com`,
+    `font-src 'self' data:`,
+    `connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.stripe.com https://*.stellar.org`,
+    `frame-src 'self' https://js.stripe.com`,
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,
     `upgrade-insecure-requests`,
   ].join("; ");
 
-  // Report-only mode for safe rollout - catches violations without blocking
-  // After 1 week of clean reports, switch to enforcing mode
+  // Enforcing mode by default for strict security
   const headerName = reportOnly
     ? "Content-Security-Policy-Report-Only"
     : "Content-Security-Policy";
 
-  // Add report-uri for violation reporting (only in report-only mode)
+  // Add report-uri for violation reporting
   const policy = reportOnly
     ? `${cspHeader}; report-uri /api/csp-report`
     : cspHeader;
@@ -71,10 +72,10 @@ export async function middleware(request: NextRequest) {
   // Generate nonce for CSP
   const nonce = crypto.randomUUID();
 
-  // Generate CSP policy (report-only mode for safe rollout)
+  // Generate CSP policy (enforcing mode)
   const { headerName: cspHeaderName, policy: cspPolicy } = generateCSP(
     nonce,
-    true,
+    false,
   );
 
   // Update Supabase session and handle auth redirects
