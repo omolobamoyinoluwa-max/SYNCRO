@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import { ValidationError } from '../errors';
 
 /**
  * Validates data against a Zod schema and throws a ValidationError if invalid.
@@ -9,15 +8,7 @@ export function validateRequest<T extends z.ZodTypeAny>(schema: T, data: unknown
   const result = schema.safeParse(data);
   
   if (!result.success) {
-    const formattedErrors: Record<string, string[]> = {};
-    
-    result.error.errors.forEach((err: z.ZodIssue) => {
-      const field = err.path.join('.') || location;
-      if (!formattedErrors[field]) formattedErrors[field] = [];
-      formattedErrors[field].push(err.message);
-    });
-    
-    throw new ValidationError(`Validation failed in ${location}`, formattedErrors);
+    throw result.error;
   }
   
   return result.data;

@@ -28,15 +28,7 @@ export function validate(
     const result = schema.safeParse(req[source]);
 
     if (!result.success) {
-      return res.status(422).json({
-        type: 'https://syncro.app/errors/validation',
-        title: 'Validation Error',
-        status: 422,
-        errors: result.error.issues.map((i) => ({
-          field: i.path.join('.'),
-          message: i.message,
-        })),
-      });
+      return next(result.error);
     }
 
     // Replace with parsed / coerced data

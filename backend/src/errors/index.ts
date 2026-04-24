@@ -30,7 +30,7 @@ export class NotFoundError extends AppError {
  */
 export class ValidationError extends AppError {
   constructor(detail: string, public errors?: Record<string, string[]>) {
-    super('Validation Error', 422, detail, 'https://syncro.app/errors/validation', { errors });
+    super('Validation Error', 400, detail, 'https://syncro.app/errors/validation', { errors });
   }
 }
 
