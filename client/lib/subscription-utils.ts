@@ -1,3 +1,4 @@
+import { addDays } from 'date-fns';
 import type { Subscription } from "@/lib/supabase/subscriptions";
 
 export function detectDuplicates(subscriptions: Subscription[]) {
@@ -103,8 +104,6 @@ export function checkRenewalReminders(subscriptions: Subscription[]) {
             name: sub.name,
             price: sub.price,
             renewsIn: sub.renews_in || 0,
-            renewalDate: new Date(
-                Date.now() + (sub.renews_in || 0) * 24 * 60 * 60 * 1000
-            ),
+            renewalDate: addDays(new Date(), sub.renews_in || 0),
         }));
 }

@@ -1,6 +1,5 @@
 import { supabase } from '../config/database';
 import logger from '../config/logger';
-import { addMonths, getDate, getDaysInMonth, setDate } from 'date-fns';
 import type { Subscription } from '../types/subscription';
 import type {
   ProjectedRenewal,
@@ -8,6 +7,7 @@ import type {
   SimulationSummary,
   RiskAssessment,
 } from '../types/simulation';
+import { addMonths, addQuarters, addYears } from 'date-fns';
 
 /**
  * Simulation service for projecting subscription renewals
@@ -15,24 +15,21 @@ import type {
 export class SimulationService {
   /**
    * Calculate the next renewal date based on billing cycle
-   * Uses calendar month/year intervals while preserving the original day-of-month.
+   * Uses calendar-aware math from date-fns
    */
   calculateNextRenewal(
     currentDate: Date,
-    billingCycle: 'monthly' | 'quarterly' | 'yearly',
-    anchorDayOfMonth: number
+    billingCycle: 'monthly' | 'quarterly' | 'yearly'
   ): Date {
-    const monthsToAdd = billingCycle === 'monthly' ? 1 : billingCycle === 'quarterly' ? 3 : 12;
-    const targetMonthDate = addMonths(currentDate, monthsToAdd);
-    const clampedDay = Math.min(anchorDayOfMonth, getDaysInMonth(targetMonthDate));
-
     switch (billingCycle) {
       case 'monthly':
-        return setDate(targetMonthDate, clampedDay);
+        return addMonths(currentDate, 1);
       case 'quarterly':
-        return setDate(targetMonthDate, clampedDay);
+        return addQuarters(currentDate, 1);
       case 'yearly':
-        return setDate(targetMonthDate, clampedDay);
+        return addYears(currentDate, 1);
+      default:
+        return currentDate;
     }
   }
 
@@ -51,7 +48,6 @@ export class SimulationService {
     }
     
     let currentRenewalDate = new Date(subscription.next_billing_date);
-    const anchorDayOfMonth = getDate(currentRenewalDate);
     
     // Generate renewals while they fall within the projection period
     while (currentRenewalDate <= endDate) {
@@ -68,8 +64,7 @@ export class SimulationService {
       // Calculate next renewal date
       currentRenewalDate = this.calculateNextRenewal(
         currentRenewalDate,
-        subscription.billing_cycle,
-        anchorDayOfMonth
+        subscription.billing_cycle
       );
     }
     

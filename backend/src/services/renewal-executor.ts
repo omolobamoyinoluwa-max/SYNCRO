@@ -3,6 +3,7 @@ import { supabase } from '../config/database';
 import { blockchainService } from './blockchain-service';
 import { DatabaseTransaction } from '../utils/transaction';
 import { webhookService } from './webhook-service';
+import { addMonths, addQuarters, addYears } from 'date-fns';
 
 interface RenewalRequest {
   subscriptionId: string;
@@ -49,7 +50,12 @@ export class RenewalExecutor {
         }
 
         // Step 4: Update DB
-        await this.updateSubscription(client, subscriptionId, contractResult.transactionHash);
+        await this.updateSubscription(
+          client,
+          subscriptionId,
+          billingWindow.billingCycle as 'monthly' | 'quarterly' | 'yearly',
+          contractResult.transactionHash
+        );
 
         // Step 5: Log result
         await this.logSuccess(client, subscriptionId, userId, contractResult.transactionHash);
@@ -122,10 +128,10 @@ export class RenewalExecutor {
   private async validateBillingWindow(
     client: any,
     subscriptionId: string
-  ): Promise<{ valid: boolean; reason?: string }> {
+  ): Promise<{ valid: boolean; reason?: string; billingCycle?: string }> {
     const { data: subscription, error } = await client
       .from('subscriptions')
-      .select('next_billing_date, status')
+      .select('next_billing_date, status, billing_cycle')
       .eq('id', subscriptionId)
       .single();
 
@@ -145,7 +151,7 @@ export class RenewalExecutor {
       return { valid: false, reason: 'Too early for renewal' };
     }
 
-    return { valid: true };
+    return { valid: true, billingCycle: subscription.billing_cycle };
   }
 
   private async triggerContractRenewal(
@@ -179,11 +185,25 @@ export class RenewalExecutor {
   private async updateSubscription(
     client: any,
     subscriptionId: string,
+    billingCycle: 'monthly' | 'quarterly' | 'yearly',
     transactionHash?: string
   ): Promise<void> {
     const now = new Date();
-    const nextBilling = new Date(now);
-    nextBilling.setMonth(nextBilling.getMonth() + 1);
+    let nextBilling: Date;
+
+    switch (billingCycle) {
+      case 'monthly':
+        nextBilling = addMonths(now, 1);
+        break;
+      case 'quarterly':
+        nextBilling = addQuarters(now, 1);
+        break;
+      case 'yearly':
+        nextBilling = addYears(now, 1);
+        break;
+      default:
+        nextBilling = addMonths(now, 1);
+    }
 
     await client
       .from('subscriptions')
