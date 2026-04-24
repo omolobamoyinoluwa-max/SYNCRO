@@ -1,5 +1,7 @@
 "use client"
 
+export { secureStorage } from "./security"
+
 // Security utilities for input sanitization and validation
 
 export function sanitizeInput(input: string): string {
@@ -167,37 +169,3 @@ export class SessionManager {
   }
 }
 
-// Secure storage wrapper
-export const secureStorage = {
-  set(key: string, value: any): void {
-    if (typeof window === "undefined") return
-    try {
-      const encrypted = btoa(JSON.stringify(value))
-      localStorage.setItem(key, encrypted)
-    } catch (error) {
-      console.error("Failed to store data:", error)
-    }
-  },
-
-  get<T>(key: string): T | null {
-    if (typeof window === "undefined") return null
-    try {
-      const encrypted = localStorage.getItem(key)
-      if (!encrypted) return null
-      return JSON.parse(atob(encrypted)) as T
-    } catch (error) {
-      console.error("Failed to retrieve data:", error)
-      return null
-    }
-  },
-
-  remove(key: string): void {
-    if (typeof window === "undefined") return
-    localStorage.removeItem(key)
-  },
-
-  clear(): void {
-    if (typeof window === "undefined") return
-    localStorage.clear()
-  },
-}
