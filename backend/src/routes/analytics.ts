@@ -3,7 +3,7 @@ import { analyticsService } from '../services/analytics-service';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
 import logger from '../config/logger';
 
-const router = Router();
+const router: Router = Router();
 
 // All analytics routes require authentication
 router.use(authenticate);

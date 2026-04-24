@@ -1,44 +1,24 @@
 import { Router, Response } from 'express';
-import { z } from 'zod';
 import { supabase } from '../config/database';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
+import { validate } from '../middleware/validate';
 import { emailService } from '../services/email-service';
 import { createTeamInviteLimiter } from '../middleware/rate-limit-factory';
 import logger from '../config/logger';
-import { validateRequest } from '../utils/validation';
-import { NotFoundError, ForbiddenError, ConflictError, BadRequestError } from '../errors';
+import { inviteTeamSchema, updateRoleSchema } from '../schemas/team';
 
-const router = Router();
+const router: Router = Router();
+
 router.use(authenticate);
 
-// ─── Validation schemas ───────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-const VALID_ROLES = ['admin', 'member', 'viewer'] as const;
-
-const inviteSchema = z.object({
-  email: z
-    .string()
-    .email('Must be a valid email address')
-    .max(254, 'Email must not exceed 254 characters'),
-  role: z.enum(VALID_ROLES, {
-    errorMap: () => ({ message: `role must be one of: ${VALID_ROLES.join(', ')}` }),
-  }).default('member'),
-});
-
-const updateRoleSchema = z.object({
-  role: z.enum(VALID_ROLES, {
-    errorMap: () => ({ message: `role must be one of: ${VALID_ROLES.join(', ')}` }),
-  }),
-});
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Find the team associated with a user (owned or member).
- */
-async function resolveUserTeam(userId: string) {
-  // Check ownership
+async function resolveUserTeam(
+  userId: string
+): Promise<{ teamId: string; isOwner: boolean; memberRole: string | null } | null> {
   const { data: ownedTeam } = await supabase
     .from('teams')
     .select('id')
@@ -49,7 +29,6 @@ async function resolveUserTeam(userId: string) {
     return { teamId: ownedTeam.id, isOwner: true, memberRole: null };
   }
 
-  // Check membership
   const { data: membership } = await supabase
     .from('team_members')
     .select('team_id, role')
@@ -67,16 +46,46 @@ function canManageTeam(ctx: { isOwner: boolean; memberRole: string | null }): bo
   return ctx.isOwner || ctx.memberRole === 'admin';
 }
 
-// ─── Routes ───────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// GET /api/team  — list team members
+// ---------------------------------------------------------------------------
 
-/**
- * GET /api/team
- * List team members
- */
 router.get('/', async (req: AuthenticatedRequest, res: Response) => {
-  const ctx = await resolveUserTeam(req.user!.id);
-  if (!ctx) {
-    return res.json({ success: true, data: [] });
+  try {
+    const ctx = await resolveUserTeam(req.user!.id);
+
+    if (!ctx) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const { data: members, error } = await supabase
+      .from('team_members')
+      .select('id, user_id, role, joined_at')
+      .eq('team_id', ctx.teamId)
+      .order('joined_at', { ascending: true });
+
+    if (error) throw error;
+
+    const enriched = await Promise.all(
+      (members ?? []).map(async (m) => {
+        const { data: userData } = await supabase.auth.admin.getUserById(m.user_id);
+        return {
+          id: m.id,
+          userId: m.user_id,
+          email: userData?.user?.email ?? null,
+          role: m.role,
+          joinedAt: m.joined_at,
+        };
+      })
+    );
+
+    res.json({ success: true, data: enriched });
+  } catch (error) {
+    logger.error('GET /api/team error:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to list team members',
+    });
   }
 
   const { data: members, error } = await supabase
@@ -103,113 +112,149 @@ router.get('/', async (req: AuthenticatedRequest, res: Response) => {
   res.json({ success: true, data: enriched });
 });
 
-/**
- * POST /api/team/invite
- */
-router.post('/invite', createTeamInviteLimiter(), async (req: AuthenticatedRequest, res: Response) => {
-  const { email, role } = validateRequest(inviteSchema, req.body);
+// ---------------------------------------------------------------------------
+// POST /api/team/invite  — invite a new member
+// ---------------------------------------------------------------------------
 
-  let ctx = await resolveUserTeam(req.user!.id);
+router.post(
+  '/invite',
+  createTeamInviteLimiter(),
+  requireRole('owner', 'admin'),
+  validate(inviteTeamSchema),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { email, role } = req.body;
 
-  if (!ctx) {
-    // Auto-create a team for first-time owners
-    const { data: newTeam, error: createErr } = await supabase
-      .from('teams')
-      .insert({ name: `${req.user!.email}'s Team`, owner_id: req.user!.id })
-      .select('id')
-      .single();
+      let ctx = await resolveUserTeam(req.user!.id);
 
-    if (createErr || !newTeam) throw createErr || new Error('Failed to create team');
-    ctx = { teamId: newTeam.id, isOwner: true, memberRole: null };
-  }
+      if (!ctx) {
+        const { data: newTeam, error: createErr } = await supabase
+          .from('teams')
+          .insert({ name: `${req.user!.email}'s Team`, owner_id: req.user!.id })
+          .select('id')
+          .single();
 
-  if (!canManageTeam(ctx)) {
-    throw new ForbiddenError('Only team owners and admins can invite members');
-  }
+        if (createErr || !newTeam) throw createErr ?? new Error('Failed to create team');
+        ctx = { teamId: newTeam.id, isOwner: true, memberRole: null };
+      }
 
-  // Check for an existing active invitation
-  const { data: existing } = await supabase
-    .from('team_invitations')
-    .select('id')
-    .eq('team_id', ctx.teamId)
-    .eq('email', email)
-    .is('accepted_at', null)
-    .gt('expires_at', new Date().toISOString())
-    .maybeSingle();
+      if (!canManageTeam(ctx)) {
+        return res.status(403).json({ success: false, error: 'Only team owners and admins can invite members' });
+      }
 
-  if (existing) {
-    throw new ConflictError('A pending invitation already exists for this email');
-  }
+      const { data: existing } = await supabase
+        .from('team_invitations')
+        .select('id, expires_at')
+        .eq('team_id', ctx.teamId)
+        .eq('email', email)
+        .is('accepted_at', null)
+        .gt('expires_at', new Date().toISOString())
+        .limit(1)
+        .single();
 
-  // Check if already a member
-  // Note: This requires admin lookup which might be restricted or slow
-  const { data: userLookup } = await (supabase.auth.admin as any).getUserByEmail?.(email) || { data: { user: null } };
-  if (userLookup?.user) {
-    const { data: alreadyMember } = await supabase
-      .from('team_members')
-      .select('id')
-      .eq('team_id', ctx.teamId)
-      .eq('user_id', userLookup.user.id)
-      .maybeSingle();
+      if (existing) {
+        return res.status(409).json({ success: false, error: 'A pending invitation already exists for this email' });
+      }
 
-    if (alreadyMember) {
-      throw new ConflictError('This user is already a team member');
+      const { data: alreadyMember } = await supabase
+        .from('team_members')
+        .select('id')
+        .eq('team_id', ctx.teamId)
+        .eq('user_id', (await (supabase.auth.admin as any)?.getUserByEmail?.(email))?.data?.user?.id ?? '')
+        .limit(1)
+        .single();
+
+      if (alreadyMember) {
+        return res.status(409).json({ success: false, error: 'This user is already a team member' });
+      }
+
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+      const { data: invitation, error: invErr } = await supabase
+        .from('team_invitations')
+        .insert({
+          team_id: ctx.teamId,
+          email,
+          role,
+          invited_by: req.user!.id,
+          expires_at: expiresAt.toISOString(),
+        })
+        .select('id, token, expires_at')
+        .single();
+
+      if (invErr || !invitation) throw invErr ?? new Error('Failed to create invitation');
+
+      const { data: team } = await supabase
+        .from('teams')
+        .select('name')
+        .eq('id', ctx.teamId)
+        .single();
+
+      const acceptUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/team/accept/${invitation.token}`;
+
+      emailService
+        .sendInvitationEmail(email, {
+          inviterEmail: req.user!.email,
+          teamName: team?.name ?? 'your team',
+          role,
+          acceptUrl,
+          expiresAt,
+        })
+        .catch((err) => logger.error('Invitation email failed:', err));
+
+      res.status(201).json({
+        success: true,
+        data: {
+          id: invitation.id,
+          email,
+          role,
+          expiresAt: invitation.expires_at,
+          acceptUrl,
+        },
+      });
+    } catch (error) {
+      logger.error('POST /api/team/invite error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to send invitation',
+      });
     }
-  }
+  },
+);
 
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+// ---------------------------------------------------------------------------
+// GET /api/team/pending  — list pending invitations
+// ---------------------------------------------------------------------------
 
-  const { data: invitation, error: invErr } = await supabase
-    .from('team_invitations')
-    .insert({
-      team_id: ctx.teamId,
-      email,
-      role,
-      invited_by: req.user!.id,
-      expires_at: expiresAt.toISOString(),
-    })
-    .select('id, token, expires_at')
-    .single();
+router.get('/pending', requireRole('owner', 'admin'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const ctx = await resolveUserTeam(req.user!.id);
 
-  if (invErr || !invitation) throw invErr || new Error('Failed to create invitation');
+    if (!ctx) {
+      return res.json({ success: true, data: [] });
+    }
 
-  const { data: team } = await supabase
-    .from('teams')
-    .select('name')
-    .eq('id', ctx.teamId)
-    .single();
+    if (!canManageTeam(ctx)) {
+      return res.status(403).json({ success: false, error: 'Only team owners and admins can view pending invitations' });
+    }
 
-  const acceptUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/team/accept/${invitation.token}`;
+    const { data: invitations, error } = await supabase
+      .from('team_invitations')
+      .select('id, email, role, expires_at, created_at, invited_by')
+      .eq('team_id', ctx.teamId)
+      .is('accepted_at', null)
+      .gt('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false });
 
-  emailService
-    .sendInvitationEmail(email, {
-      inviterEmail: req.user!.email,
-      teamName: team?.name ?? 'your team',
-      role,
-      acceptUrl,
-      expiresAt,
-    })
-    .catch((err) => logger.error('Invitation email failed:', err));
+    if (error) throw error;
 
-  res.status(201).json({
-    success: true,
-    data: {
-      id: invitation.id,
-      email,
-      role,
-      expiresAt: invitation.expires_at,
-      acceptUrl,
-    },
-  });
-});
-
-/**
- * GET /api/team/pending
- */
-router.get('/pending', async (req: AuthenticatedRequest, res: Response) => {
-  const ctx = await resolveUserTeam(req.user!.id);
-  if (!ctx || !canManageTeam(ctx)) {
-    throw new ForbiddenError('Only team owners and admins can view pending invitations');
+    res.json({ success: true, data: invitations ?? [] });
+  } catch (error) {
+    logger.error('GET /api/team/pending error:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to list pending invitations',
+    });
   }
 
   const { data: invitations, error } = await supabase
@@ -225,9 +270,10 @@ router.get('/pending', async (req: AuthenticatedRequest, res: Response) => {
   res.json({ success: true, data: invitations ?? [] });
 });
 
-/**
- * POST /api/team/accept/:token
- */
+// ---------------------------------------------------------------------------
+// POST /api/team/accept/:token  — accept an invitation
+// ---------------------------------------------------------------------------
+
 router.post('/accept/:token', async (req: AuthenticatedRequest, res: Response) => {
   const { token } = req.params;
 
@@ -246,16 +292,34 @@ router.post('/accept/:token', async (req: AuthenticatedRequest, res: Response) =
     throw new BadRequestError('Invitation has expired'); // Or perhaps a custom 410 if desired, but 400/404 is cleaner
   }
 
-  if (req.user!.email !== invitation.email) {
-    throw new ForbiddenError('This invitation was sent to a different email address');
-  }
+    if (req.user!.email !== invitation.email) {
+      return res.status(403).json({
+        success: false,
+        error: 'This invitation was sent to a different email address',
+      });
+    }
 
-  const { data: existing } = await supabase
-    .from('team_members')
-    .select('id')
-    .eq('team_id', invitation.team_id)
-    .eq('user_id', req.user!.id)
-    .maybeSingle();
+    const { data: existing } = await supabase
+      .from('team_members')
+      .select('id')
+      .eq('team_id', invitation.team_id)
+      .eq('user_id', req.user!.id)
+      .single();
+
+    if (existing) {
+      await supabase
+        .from('team_invitations')
+        .update({ accepted_at: new Date().toISOString() })
+        .eq('id', invitation.id);
+
+      return res.json({ success: true, message: 'You are already a member of this team' });
+    }
+
+    const { error: memberErr } = await supabase
+      .from('team_members')
+      .insert({ team_id: invitation.team_id, user_id: req.user!.id, role: invitation.role });
+
+    if (memberErr) throw memberErr;
 
   if (existing) {
     await supabase
@@ -280,47 +344,109 @@ router.post('/accept/:token', async (req: AuthenticatedRequest, res: Response) =
   res.json({ success: true, message: 'You have joined the team', data: { role: invitation.role } });
 });
 
-/**
- * PUT /api/team/:memberId/role
- */
-router.put('/:memberId/role', async (req: AuthenticatedRequest, res: Response) => {
-  const { role } = validateRequest(updateRoleSchema, req.body);
-  const ctx = await resolveUserTeam(req.user!.id);
+// ---------------------------------------------------------------------------
+// PUT /api/team/:memberId/role  — update a member's role (owner only)
+// ---------------------------------------------------------------------------
 
-  if (!ctx?.isOwner) {
-    throw new ForbiddenError('Only the team owner can change member roles');
-  }
+router.put(
+  '/:memberId/role',
+  requireRole('owner'),
+  validate(updateRoleSchema),
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { memberId } = req.params;
+      const { role } = req.body;
 
-  const { data: member, error: fetchErr } = await supabase
-    .from('team_members')
-    .select('id, user_id')
-    .eq('id', req.params.memberId)
-    .eq('team_id', ctx.teamId)
-    .maybeSingle();
+      const ctx = await resolveUserTeam(req.user!.id);
 
-  if (fetchErr || !member) {
-    throw new NotFoundError('Team member not found');
-  }
+      if (!ctx?.isOwner) {
+        return res.status(403).json({ success: false, error: 'Only the team owner can change member roles' });
+      }
 
-  const { data: updated, error: updateErr } = await supabase
-    .from('team_members')
-    .update({ role })
-    .eq('id', req.params.memberId)
-    .select('id, user_id, role, joined_at')
-    .single();
+      const { data: member, error: fetchErr } = await supabase
+        .from('team_members')
+        .select('id, user_id, role')
+        .eq('id', memberId)
+        .eq('team_id', ctx.teamId)
+        .single();
 
-  if (updateErr) throw updateErr;
+      if (fetchErr || !member) {
+        return res.status(404).json({ success: false, error: 'Team member not found' });
+      }
 
-  res.json({ success: true, data: updated });
-});
+      const { data: updated, error: updateErr } = await supabase
+        .from('team_members')
+        .update({ role })
+        .eq('id', memberId)
+        .select('id, user_id, role, joined_at')
+        .single();
 
-/**
- * DELETE /api/team/:memberId
- */
-router.delete('/:memberId', async (req: AuthenticatedRequest, res: Response) => {
-  const ctx = await resolveUserTeam(req.user!.id);
-  if (!ctx || !canManageTeam(ctx)) {
-    throw new ForbiddenError('Only team owners and admins can remove members');
+      if (updateErr) throw updateErr;
+
+      res.json({ success: true, data: updated });
+    } catch (error) {
+      logger.error('PUT /api/team/:memberId/role error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to update member role',
+      });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// DELETE /api/team/:memberId  — remove a team member (owner or admin)
+// ---------------------------------------------------------------------------
+
+router.delete('/:memberId', requireRole('owner', 'admin'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { memberId } = req.params;
+
+    const ctx = await resolveUserTeam(req.user!.id);
+
+    if (!ctx) {
+      return res.status(403).json({ success: false, error: 'You are not part of a team' });
+    }
+
+    if (!canManageTeam(ctx)) {
+      return res.status(403).json({ success: false, error: 'Only team owners and admins can remove members' });
+    }
+
+    const { data: member, error: fetchErr } = await supabase
+      .from('team_members')
+      .select('id, user_id')
+      .eq('id', memberId)
+      .eq('team_id', ctx.teamId)
+      .single();
+
+    if (fetchErr || !member) {
+      return res.status(404).json({ success: false, error: 'Team member not found' });
+    }
+
+    const { data: team } = await supabase
+      .from('teams')
+      .select('owner_id')
+      .eq('id', ctx.teamId)
+      .single();
+
+    if (team?.owner_id === member.user_id) {
+      return res.status(400).json({ success: false, error: 'Cannot remove the team owner' });
+    }
+
+    const { error: deleteErr } = await supabase
+      .from('team_members')
+      .delete()
+      .eq('id', memberId);
+
+    if (deleteErr) throw deleteErr;
+
+    res.json({ success: true, message: 'Team member removed' });
+  } catch (error) {
+    logger.error('DELETE /api/team/:memberId error:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to remove team member',
+    });
   }
 
   const { data: member, error: fetchErr } = await supabase

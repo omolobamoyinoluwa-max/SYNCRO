@@ -1,9 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { supabase } from '../config/database';
 import { authenticate, AuthenticatedRequest } from '../middleware/auth';
-import { validateRequest } from '../utils/validation';
+import { validate } from '../middleware/validate';
+import logger from '../config/logger';
+import { pushSubscribeSchema } from '../schemas/push-notification';
 
-const router = Router();
+const router: Router = Router();
+
 router.use(authenticate);
 
 const subscribeSchema = z.object({
@@ -17,28 +20,16 @@ const subscribeSchema = z.object({
 
 /**
  * POST /api/notifications/push/subscribe
+ * Save a browser push subscription
  */
-router.post('/subscribe', async (req: AuthenticatedRequest, res: Response) => {
-  const { endpoint, keys, userAgent } = validateRequest(subscribeSchema, req.body);
-  const userId = req.user!.id;
+router.post('/subscribe', validate(pushSubscribeSchema), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized' });
+    }
 
-  const { data, error } = await supabase
-    .from('push_subscriptions')
-    .upsert(
-      {
-        user_id: userId,
-        endpoint,
-        p256dh: keys.p256dh,
-        auth: keys.auth,
-        user_agent: userAgent ?? null,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'user_id,endpoint' },
-    )
-    .select('id, endpoint, created_at')
-    .single();
-
-  if (error) throw error;
+    const { endpoint, keys, userAgent } = req.body;
 
   res.status(201).json({
     success: true,
@@ -48,6 +39,7 @@ router.post('/subscribe', async (req: AuthenticatedRequest, res: Response) => {
 
 /**
  * DELETE /api/notifications/push/unsubscribe
+ * Remove a push subscription
  */
 router.delete('/unsubscribe', async (req: AuthenticatedRequest, res: Response) => {
   const { endpoint } = req.body as { endpoint?: string };
@@ -79,24 +71,8 @@ router.get('/status', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 /**
- * @openapi
- * /api/notifications/push/vapid-public-key:
- *   get:
- *     tags: [Push Notifications]
- *     summary: Get the VAPID public key for push subscriptions
- *     responses:
- *       200:
- *         description: VAPID public key
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success: { type: boolean }
- *                 data:
- *                   type: object
- *                   properties:
- *                     publicKey: { type: string }
+ * GET /api/notifications/push/status
+ * Check if user has an active push subscription
  */
 router.get('/vapid-public-key', (req: Request, res: Response) => {
   try {
