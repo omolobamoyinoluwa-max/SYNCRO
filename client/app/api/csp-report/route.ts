@@ -1,4 +1,22 @@
 import { NextRequest, NextResponse } from "next/server"
+import { z } from "zod"
+
+/**
+ * CSP Violation Report Schema
+ */
+const CspReportSchema = z.object({
+  "csp-report": z.object({
+    "document-uri": z.string().url(),
+    "violated-directive": z.string(),
+    "blocked-uri": z.string().optional(),
+    "source-file": z.string().optional(),
+    "line-number": z.number().optional(),
+    "column-number": z.number().optional(),
+    "disposition": z.enum(["enforce", "report"]).optional(),
+    "status-code": z.number().optional(),
+    "script-sample": z.string().optional(),
+  }),
+})
 
 /**
  * CSP Violation Report Endpoint
@@ -10,15 +28,21 @@ import { NextRequest, NextResponse } from "next/server"
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
-    const report = body["csp-report"]
+    const rawBody = await request.json()
+    const result = CspReportSchema.safeParse(rawBody)
 
-    if (!report) {
+    if (!result.success) {
       return NextResponse.json(
-        { success: false, error: "Invalid report format" },
+        { 
+          success: false, 
+          error: "Invalid report format", 
+          details: result.error.format() 
+        },
         { status: 400 }
       )
     }
+
+    const report = result.data["csp-report"]
 
     // Log the violation for monitoring
     // In production, you might want to send this to a logging service

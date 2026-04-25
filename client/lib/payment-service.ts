@@ -1,5 +1,6 @@
 import Stripe from "stripe"
 import { createClient } from "./supabase/server"
+import { getStripeInstance } from "./stripe-config"
 
 export interface PaymentConfig {
   provider: "stripe" | "paypal" | "mock"
@@ -18,10 +19,8 @@ export class PaymentService {
 
   constructor(config: PaymentConfig) {
     this.provider = config.provider
-    if (this.provider === "stripe" && process.env.STRIPE_SECRET_KEY) {
-      this.stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
-        apiVersion: "2025-11-17.clover" as any,
-      })
+    if (this.provider === "stripe") {
+      this.stripe = getStripeInstance(config.apiKey)
     }
   }
 
