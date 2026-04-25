@@ -26,11 +26,11 @@ export class NotFoundError extends AppError {
 }
 
 /**
- * Thrown when request input fails validation (HTTP 422).
+ * Thrown when request input fails validation (HTTP 400).
  */
 export class ValidationError extends AppError {
   constructor(detail: string, public errors?: Record<string, string[]>) {
-    super('Validation Error', 422, detail, 'https://syncro.app/errors/validation', { errors });
+    super('Validation Error', 400, detail, 'https://syncro.app/errors/validation', { errors });
   }
 }
 

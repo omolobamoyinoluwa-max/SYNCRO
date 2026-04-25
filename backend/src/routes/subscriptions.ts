@@ -1,5 +1,4 @@
 import { Router, Response } from 'express';
-import { z } from 'zol'; // Wait, it's 'zod'
 import { z } from 'zod';
 import multer from 'multer';
 import { subscriptionService } from '../services/subscription-service';
@@ -10,7 +9,7 @@ import { authenticate, AuthenticatedRequest } from '../middleware/auth';
 import { validateSubscriptionOwnership, validateBulkSubscriptionOwnership } from '../middleware/ownership';
 import { SUPPORTED_CURRENCIES } from '../constants/currencies';
 import logger from '../config/logger';
-import { ValidationError, NotFoundError, BadRequestError, ConflictError } from '../errors';
+import { BadRequestError } from '../errors';
 import { validateRequest } from '../utils/validation';
 
 const router = Router();

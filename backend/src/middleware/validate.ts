@@ -8,7 +8,7 @@ import { Request, Response, NextFunction } from 'express';
  * On success the raw value is **replaced** with the parsed / coerced result
  * so downstream handlers receive clean, typed data.
  *
- * On failure a **422 Unprocessable Entity** response is returned using the
+ * On failure a **400 Bad Request** response is returned using the
  * RFC 9457 Problem Details format.
  *
  * @param schema - Any Zod schema (z.object, z.array, …)
@@ -28,15 +28,7 @@ export function validate(
     const result = schema.safeParse(req[source]);
 
     if (!result.success) {
-      return res.status(422).json({
-        type: 'https://syncro.app/errors/validation',
-        title: 'Validation Error',
-        status: 422,
-        errors: result.error.issues.map((i) => ({
-          field: i.path.join('.'),
-          message: i.message,
-        })),
-      });
+      return next(result.error);
     }
 
     // Replace with parsed / coerced data
